@@ -6,9 +6,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
-The first public release will be 0.2.0. Versions 0.1.0 and 0.1.1 were private builds.
+## [0.2.0] - 2026-10-17
 
-## 0.2.0
+The first public release. Versions 0.1.0 and 0.1.1 were private builds.
 
 Feature round 1. A user wrote: "none of them report ZFS ARC stats, so I gave up and went back to top." This release adds ZFS ARC stats, and more.
 
@@ -63,4 +63,5 @@ Feature round 1. A user wrote: "none of them report ZFS ARC stats, so I gave up 
 - Pause, and a refresh interval from 250 to 8000 ms (`-i`, `+` and `-`).
 - Release binaries for macOS (universal), Linux x86_64 and arm64 (static musl), and Windows x86_64.
 
-[Unreleased]: https://github.com/DarkWaveLabs/rtop/commits/main
+[Unreleased]: https://github.com/DarkWaveLabs/rtop/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/DarkWaveLabs/rtop/releases/tag/v0.2.0

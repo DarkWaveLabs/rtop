@@ -21,6 +21,8 @@ cargo run                     # debug build
 cargo run --release -- -i 500 # release build, 500 ms refresh
 ```
 
+To read how the code fits together before you change it, see the [architecture page](docs/architecture.md). To build a static Linux binary with Docker, see [Install](docs/install.md#build-from-source).
+
 On macOS with the Homebrew `rustup` formula, `cargo` is keg-only. Add `/opt/homebrew/opt/rustup/bin` to your `PATH` if your shell cannot find it.
 
 ### Test the ZFS panel without ZFS
@@ -30,6 +32,8 @@ A debug build reads ZFS ARC counters from a file when `RTOP_ZFS_ARCSTATS` is set
 ```sh
 RTOP_ZFS_ARCSTATS=testdata/arcstats-2.2.txt cargo run
 ```
+
+The file does not change, so there are no reads in the window. The hit values then show the since-boot ratios with the `boot` label. The fixtures in `testdata/` are synthetic. See [ZFS ARC](docs/zfs.md#try-the-panel-without-zfs).
 
 ## Checks
 
@@ -50,7 +54,14 @@ for t in x86_64-unknown-linux-musl x86_64-pc-windows-msvc x86_64-unknown-freebsd
 done
 ```
 
-If you change code for one OS, say in the pull request whether you ran it on that OS.
+To run the tests on Linux from another OS, use Docker:
+
+```sh
+docker run --rm -v "$PWD":/src:ro -w /src -e CARGO_TARGET_DIR=/tmp/target \
+  rust:1.99-alpine cargo test --locked
+```
+
+If you change code for one OS, say in the pull request whether you ran it on that OS. The [platforms page](docs/platforms.md) lists what each OS supports and how it is tested.
 
 ## Code rules
 
