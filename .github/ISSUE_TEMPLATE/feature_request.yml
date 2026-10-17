@@ -1,0 +1,34 @@
+name: Feature request
+description: Suggest a new feature or a change to how rtop works.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        rtop stays small and fast on purpose. A feature that needs a new dependency or makes sampling slower needs a strong reason. Read [CONTRIBUTING.md](https://github.com/DarkWaveLabs/rtop/blob/main/CONTRIBUTING.md) before you start work on a pull request.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What do you want to see or do that rtop does not let you do now?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How it could look on screen, which key or config option controls it, and which operating systems it applies to.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Other tools that do this, or other ways to get the same result.
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contribution
+      options:
+        - label: I can send a pull request for this.
+          required: false

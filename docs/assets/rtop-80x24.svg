@@ -1,0 +1,378 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="704" height="486" viewBox="0 0 704 486" role="img" aria-label="rtop terminal screenshot">
+<title>rtop</title>
+<style>text{font-family:ui-monospace, &apos;SF Mono&apos;, SFMono-Regular, Menlo, Consolas, &apos;DejaVu Sans Mono&apos;, &apos;Liberation Mono&apos;, monospace;font-size:14px;white-space:pre;dominant-baseline:auto}.b{font-weight:700}</style>
+<rect x="0.5" y="0.5" width="703" height="485" rx="10" ry="10" fill="#100e16" stroke="#2e2a3a"/>
+<path d="M0.5 28.5 H703.5" stroke="#2e2a3a"/>
+<circle cx="18" cy="14.5" r="6" fill="#ff5f57"/>
+<circle cx="38" cy="14.5" r="6" fill="#febc2e"/>
+<circle cx="58" cy="14.5" r="6" fill="#28c840"/>
+<text x="352" y="19" text-anchor="middle" fill="#9a95ad" style="font-size:13px">rtop</text>
+<rect x="16" y="40" width="50.4" height="18" fill="#7c3aed"/>
+<rect x="24.4" y="328" width="655.2" height="18" fill="#3b1f6b"/>
+<g shape-rendering="crispEdges">
+<rect x="49.6" y="76" width="8.42" height="18.02" fill="#60a5fa"/>
+<rect x="58" y="76" width="4.2" height="18.02" fill="#60a5fa"/>
+<rect x="276.4" y="76" width="6.3" height="18.02" fill="#60a5fa"/>
+<rect x="494.8" y="76" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="503.2" y="76" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="511.6" y="76" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="520" y="76" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="528.4" y="76" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="536.8" y="76" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="545.2" y="76" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="553.6" y="76" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="562" y="76" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="570.4" y="76" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="578.8" y="76" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="587.2" y="76" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="595.6" y="76" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="604" y="76" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="612.4" y="76" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="620.8" y="76" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="629.2" y="76" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="49.6" y="94" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="58" y="94" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="66.4" y="94" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="74.8" y="94" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="83.2" y="94" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="91.6" y="94" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="100" y="94" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="108.4" y="94" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="116.8" y="94" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="125.2" y="94" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="133.6" y="94" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="142" y="94" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="150.4" y="94" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="158.8" y="94" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="167.2" y="94" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="175.6" y="94" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="184" y="94" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="276.4" y="94" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="284.8" y="94" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="293.2" y="94" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="301.6" y="94" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="310" y="94" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="318.4" y="94" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="326.8" y="94" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="335.2" y="94" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="343.6" y="94" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="352" y="94" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="360.4" y="94" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="368.8" y="94" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="377.2" y="94" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="385.6" y="94" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="394" y="94" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="402.4" y="94" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="494.8" y="94" width="8.42" height="18.02" fill="#60a5fa"/>
+<rect x="503.2" y="94" width="4.2" height="18.02" fill="#60a5fa"/>
+<rect x="360.4" y="168.25" width="8.42" height="15.77" fill="#60a5fa"/>
+<rect x="368.8" y="177.25" width="8.42" height="6.77" fill="#60a5fa"/>
+<rect x="377.2" y="170.5" width="8.42" height="13.52" fill="#60a5fa"/>
+<rect x="385.6" y="179.5" width="8.42" height="4.52" fill="#60a5fa"/>
+<rect x="394" y="175" width="8.42" height="9.02" fill="#60a5fa"/>
+<rect x="410.8" y="172.75" width="8.42" height="11.27" fill="#60a5fa"/>
+<rect x="419.2" y="179.5" width="8.42" height="4.52" fill="#60a5fa"/>
+<rect x="427.6" y="175" width="8.42" height="9.02" fill="#60a5fa"/>
+<rect x="436" y="177.25" width="8.42" height="6.77" fill="#60a5fa"/>
+<rect x="444.4" y="177.25" width="8.42" height="6.77" fill="#60a5fa"/>
+<rect x="452.8" y="179.5" width="8.42" height="4.52" fill="#60a5fa"/>
+<rect x="461.2" y="168.25" width="8.42" height="15.77" fill="#60a5fa"/>
+<rect x="469.6" y="177.25" width="8.42" height="6.77" fill="#60a5fa"/>
+<rect x="486.4" y="181.75" width="8.42" height="2.27" fill="#60a5fa"/>
+<rect x="494.8" y="179.5" width="8.42" height="4.52" fill="#60a5fa"/>
+<rect x="503.2" y="166" width="8.42" height="18.02" fill="#60a5fa"/>
+<rect x="528.4" y="181.75" width="8.42" height="2.27" fill="#f472b6"/>
+<rect x="545.2" y="170.5" width="8.42" height="13.52" fill="#f472b6"/>
+<rect x="562" y="179.5" width="8.42" height="4.52" fill="#f472b6"/>
+<rect x="570.4" y="168.25" width="8.42" height="15.77" fill="#f472b6"/>
+<rect x="587.2" y="179.5" width="8.42" height="4.52" fill="#f472b6"/>
+<rect x="595.6" y="175" width="8.42" height="9.02" fill="#f472b6"/>
+<rect x="604" y="175" width="8.42" height="9.02" fill="#f472b6"/>
+<rect x="620.8" y="172.75" width="8.42" height="11.27" fill="#f472b6"/>
+<rect x="629.2" y="181.75" width="8.42" height="2.27" fill="#f472b6"/>
+<rect x="637.6" y="166" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="646" y="177.25" width="8.42" height="6.77" fill="#f472b6"/>
+<rect x="654.4" y="172.75" width="8.42" height="11.27" fill="#f472b6"/>
+<rect x="662.8" y="177.25" width="8.42" height="6.77" fill="#f472b6"/>
+<rect x="671.2" y="179.5" width="8.42" height="4.52" fill="#f472b6"/>
+<rect x="360.4" y="184" width="8.42" height="18.02" fill="#60a5fa"/>
+<rect x="368.8" y="184" width="8.42" height="18.02" fill="#60a5fa"/>
+<rect x="377.2" y="184" width="8.42" height="18.02" fill="#60a5fa"/>
+<rect x="385.6" y="184" width="8.42" height="18.02" fill="#60a5fa"/>
+<rect x="394" y="184" width="8.42" height="18.02" fill="#60a5fa"/>
+<rect x="402.4" y="184" width="8.42" height="18.02" fill="#60a5fa"/>
+<rect x="410.8" y="184" width="8.42" height="18.02" fill="#60a5fa"/>
+<rect x="419.2" y="184" width="8.42" height="18.02" fill="#60a5fa"/>
+<rect x="427.6" y="184" width="8.42" height="18.02" fill="#60a5fa"/>
+<rect x="436" y="184" width="8.42" height="18.02" fill="#60a5fa"/>
+<rect x="444.4" y="184" width="8.42" height="18.02" fill="#60a5fa"/>
+<rect x="452.8" y="184" width="8.42" height="18.02" fill="#60a5fa"/>
+<rect x="461.2" y="184" width="8.42" height="18.02" fill="#60a5fa"/>
+<rect x="469.6" y="184" width="8.42" height="18.02" fill="#60a5fa"/>
+<rect x="478" y="184" width="8.42" height="18.02" fill="#60a5fa"/>
+<rect x="486.4" y="184" width="8.42" height="18.02" fill="#60a5fa"/>
+<rect x="494.8" y="184" width="8.42" height="18.02" fill="#60a5fa"/>
+<rect x="503.2" y="184" width="8.42" height="18.02" fill="#60a5fa"/>
+<rect x="528.4" y="184" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="536.8" y="186.25" width="8.42" height="15.77" fill="#f472b6"/>
+<rect x="545.2" y="184" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="553.6" y="184" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="562" y="184" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="570.4" y="184" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="578.8" y="186.25" width="8.42" height="15.77" fill="#f472b6"/>
+<rect x="587.2" y="184" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="595.6" y="184" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="604" y="184" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="612.4" y="190.75" width="8.42" height="11.27" fill="#f472b6"/>
+<rect x="620.8" y="184" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="629.2" y="184" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="637.6" y="184" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="646" y="184" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="654.4" y="184" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="662.8" y="184" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="671.2" y="184" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="74.8" y="256" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="83.2" y="256" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="91.6" y="256" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="100" y="256" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="108.4" y="256" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="116.8" y="256" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="125.2" y="256" width="8.42" height="18.02" fill="#f472b6"/>
+<rect x="133.6" y="256" width="4.2" height="18.02" fill="#f472b6"/>
+<rect x="24.4" y="328" width="4.2" height="18.02" fill="#e4e0ee"/>
+</g><g>
+<path d="M100 67H679.6" stroke="#6e6a86" stroke-width="1.2"/>
+<path d="M24.4 67H24.4Q20.2 67 20.2 71.2V76" fill="none" stroke="#6e6a86" stroke-width="1.2"/>
+<path d="M679.6 67H679.6Q683.8 67 683.8 71.2V76" fill="none" stroke="#6e6a86" stroke-width="1.2"/>
+<path d="M20.2 76V85" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M20.2 85V94" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M683.8 76V85" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M683.8 85V94" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M20.2 94V103" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M20.2 103V112" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M683.8 94V103" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M683.8 103V112" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M24.4 121H679.6" stroke="#6e6a86" stroke-width="1.2"/>
+<path d="M24.4 121H24.4Q20.2 121 20.2 116.8V112" fill="none" stroke="#6e6a86" stroke-width="1.2"/>
+<path d="M679.6 121H679.6Q683.8 121 683.8 116.8V112" fill="none" stroke="#6e6a86" stroke-width="1.2"/>
+<path d="M125.2 139H343.6" stroke="#6e6a86" stroke-width="1.2"/>
+<path d="M436 139H679.6" stroke="#6e6a86" stroke-width="1.2"/>
+<path d="M24.4 139H24.4Q20.2 139 20.2 143.2V148" fill="none" stroke="#6e6a86" stroke-width="1.2"/>
+<path d="M343.6 139H343.6Q347.8 139 347.8 143.2V148" fill="none" stroke="#6e6a86" stroke-width="1.2"/>
+<path d="M360.4 139H360.4Q356.2 139 356.2 143.2V148" fill="none" stroke="#6e6a86" stroke-width="1.2"/>
+<path d="M679.6 139H679.6Q683.8 139 683.8 143.2V148" fill="none" stroke="#6e6a86" stroke-width="1.2"/>
+<path d="M251.2 157H276.4" stroke="#60a5fa" stroke-width="2.6"/>
+<path d="M276.4 157H343.6" stroke="#3a374a" stroke-width="2.6"/>
+<path d="M20.2 148V157" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M20.2 157V166" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M347.8 148V157" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M347.8 157V166" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M356.2 148V157" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M356.2 157V166" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M683.8 148V157" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M683.8 157V166" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M251.2 175H343.6" stroke="#3a374a" stroke-width="2.6"/>
+<path d="M20.2 166V175" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M20.2 175V184" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M347.8 166V175" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M347.8 175V184" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M356.2 166V175" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M356.2 175V184" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M683.8 166V175" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M683.8 175V184" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M20.2 184V193" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M20.2 193V202" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M347.8 184V193" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M347.8 193V202" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M356.2 184V193" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M356.2 193V202" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M683.8 184V193" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M683.8 193V202" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M24.4 211H343.6" stroke="#6e6a86" stroke-width="1.2"/>
+<path d="M360.4 211H679.6" stroke="#6e6a86" stroke-width="1.2"/>
+<path d="M24.4 211H24.4Q20.2 211 20.2 206.8V202" fill="none" stroke="#6e6a86" stroke-width="1.2"/>
+<path d="M343.6 211H343.6Q347.8 211 347.8 206.8V202" fill="none" stroke="#6e6a86" stroke-width="1.2"/>
+<path d="M360.4 211H360.4Q356.2 211 356.2 206.8V202" fill="none" stroke="#6e6a86" stroke-width="1.2"/>
+<path d="M679.6 211H679.6Q683.8 211 683.8 206.8V202" fill="none" stroke="#6e6a86" stroke-width="1.2"/>
+<path d="M133.6 229H343.6" stroke="#6e6a86" stroke-width="1.2"/>
+<path d="M503.2 229H679.6" stroke="#6e6a86" stroke-width="1.2"/>
+<path d="M24.4 229H24.4Q20.2 229 20.2 233.2V238" fill="none" stroke="#6e6a86" stroke-width="1.2"/>
+<path d="M343.6 229H343.6Q347.8 229 347.8 233.2V238" fill="none" stroke="#6e6a86" stroke-width="1.2"/>
+<path d="M360.4 229H360.4Q356.2 229 356.2 233.2V238" fill="none" stroke="#6e6a86" stroke-width="1.2"/>
+<path d="M679.6 229H679.6Q683.8 229 683.8 233.2V238" fill="none" stroke="#6e6a86" stroke-width="1.2"/>
+<path d="M612.4 247H662.8" stroke="#a78bfa" stroke-width="2.6"/>
+<path d="M662.8 247H679.6" stroke="#3a374a" stroke-width="2.6"/>
+<path d="M20.2 238V247" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M20.2 247V256" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M347.8 238V247" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M347.8 247V256" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M356.2 238V247" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M356.2 247V256" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M683.8 238V247" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M683.8 247V256" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M20.2 256V265" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M20.2 265V274" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M347.8 256V265" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M347.8 265V274" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M356.2 256V265" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M356.2 265V274" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M683.8 256V265" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M683.8 265V274" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M24.4 283H343.6" stroke="#6e6a86" stroke-width="1.2"/>
+<path d="M360.4 283H679.6" stroke="#6e6a86" stroke-width="1.2"/>
+<path d="M24.4 283H24.4Q20.2 283 20.2 278.8V274" fill="none" stroke="#6e6a86" stroke-width="1.2"/>
+<path d="M343.6 283H343.6Q347.8 283 347.8 278.8V274" fill="none" stroke="#6e6a86" stroke-width="1.2"/>
+<path d="M360.4 283H360.4Q356.2 283 356.2 278.8V274" fill="none" stroke="#6e6a86" stroke-width="1.2"/>
+<path d="M679.6 283H679.6Q683.8 283 683.8 278.8V274" fill="none" stroke="#6e6a86" stroke-width="1.2"/>
+<path d="M259.6 301H679.6" stroke="#6e6a86" stroke-width="1.2"/>
+<path d="M24.4 301H24.4Q20.2 301 20.2 305.2V310" fill="none" stroke="#6e6a86" stroke-width="1.2"/>
+<path d="M679.6 301H679.6Q683.8 301 683.8 305.2V310" fill="none" stroke="#6e6a86" stroke-width="1.2"/>
+<path d="M20.2 310V319" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M20.2 319V328" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M683.8 310V319" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M683.8 319V328" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M20.2 328V337" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M20.2 337V346" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M683.8 328V337" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M683.8 337V346" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M20.2 346V355" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M20.2 355V364" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M683.8 346V355" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M683.8 355V364" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M20.2 364V373" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M20.2 373V382" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M683.8 364V373" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M683.8 373V382" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M20.2 382V391" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M20.2 391V400" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M683.8 382V391" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M683.8 391V400" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M20.2 400V409" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M20.2 409V418" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M683.8 400V409" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M683.8 409V418" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M20.2 418V427" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M20.2 427V436" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M683.8 418V427" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M683.8 427V436" stroke="#6e6a86" stroke-width="1.2" stroke-linecap="square"/>
+<path d="M24.4 445H679.6" stroke="#6e6a86" stroke-width="1.2"/>
+<path d="M24.4 445H24.4Q20.2 445 20.2 440.8V436" fill="none" stroke="#6e6a86" stroke-width="1.2"/>
+<path d="M679.6 445H679.6Q683.8 445 683.8 440.8V436" fill="none" stroke="#6e6a86" stroke-width="1.2"/>
+</g>
+<text x="24.4" y="53.68" fill="#ffffff" class="b" xml:space="preserve" textLength="33.6" lengthAdjust="spacingAndGlyphs">rtop</text>
+<text x="74.8" y="53.68" fill="#a78bfa" class="b" xml:space="preserve" textLength="75.6" lengthAdjust="spacingAndGlyphs">rtop-demo</text>
+<text x="158.8" y="53.68" fill="#3a374a" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">·</text>
+<text x="175.6" y="53.68" fill="#e4e0ee" xml:space="preserve" textLength="226.8" lengthAdjust="spacingAndGlyphs">Linux (Alpine Linux 3.24.2)</text>
+<text x="410.8" y="53.68" fill="#3a374a" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">·</text>
+<text x="427.6" y="53.68" fill="#e4e0ee" xml:space="preserve" textLength="58.8" lengthAdjust="spacingAndGlyphs">aarch64</text>
+<text x="494.8" y="53.68" fill="#3a374a" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">·</text>
+<text x="511.6" y="53.68" fill="#6e6a86" xml:space="preserve" textLength="16.8" lengthAdjust="spacingAndGlyphs">up</text>
+<text x="536.8" y="53.68" fill="#e4e0ee" xml:space="preserve" textLength="58.8" lengthAdjust="spacingAndGlyphs">15h 04m</text>
+<text x="604" y="53.68" fill="#3a374a" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">·</text>
+<text x="620.8" y="53.68" fill="#6e6a86" xml:space="preserve" textLength="33.6" lengthAdjust="spacingAndGlyphs">load</text>
+<text x="662.8" y="53.68" fill="#e4e0ee" xml:space="preserve" textLength="25.2" lengthAdjust="spacingAndGlyphs">3.3</text>
+<text x="32.8" y="71.68" fill="#a78bfa" class="b" xml:space="preserve" textLength="58.8" lengthAdjust="spacingAndGlyphs">cpu 53%</text>
+<text x="32.8" y="89.68" fill="#6e6a86" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">0</text>
+<text x="66.4" y="89.68" fill="#3a374a" xml:space="preserve" textLength="126" lengthAdjust="spacingAndGlyphs">···············</text>
+<text x="217.6" y="89.68" fill="#e4e0ee" xml:space="preserve" textLength="16.8" lengthAdjust="spacingAndGlyphs">9%</text>
+<text x="259.6" y="89.68" fill="#6e6a86" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">2</text>
+<text x="284.8" y="89.68" fill="#3a374a" xml:space="preserve" textLength="126" lengthAdjust="spacingAndGlyphs">···············</text>
+<text x="436" y="89.68" fill="#e4e0ee" xml:space="preserve" textLength="16.8" lengthAdjust="spacingAndGlyphs">5%</text>
+<text x="478" y="89.68" fill="#6e6a86" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">4</text>
+<text x="646" y="89.68" fill="#e4e0ee" xml:space="preserve" textLength="33.6" lengthAdjust="spacingAndGlyphs">100%</text>
+<text x="32.8" y="107.68" fill="#6e6a86" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">1</text>
+<text x="200.8" y="107.68" fill="#e4e0ee" xml:space="preserve" textLength="33.6" lengthAdjust="spacingAndGlyphs">100%</text>
+<text x="259.6" y="107.68" fill="#6e6a86" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">3</text>
+<text x="419.2" y="107.68" fill="#e4e0ee" xml:space="preserve" textLength="33.6" lengthAdjust="spacingAndGlyphs">100%</text>
+<text x="478" y="107.68" fill="#6e6a86" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">5</text>
+<text x="511.6" y="107.68" fill="#3a374a" xml:space="preserve" textLength="126" lengthAdjust="spacingAndGlyphs">···············</text>
+<text x="662.8" y="107.68" fill="#e4e0ee" xml:space="preserve" textLength="16.8" lengthAdjust="spacingAndGlyphs">9%</text>
+<text x="32.8" y="143.68" fill="#a78bfa" class="b" xml:space="preserve" textLength="84" lengthAdjust="spacingAndGlyphs">memory 30%</text>
+<text x="368.8" y="143.68" fill="#a78bfa" class="b" xml:space="preserve" textLength="58.8" lengthAdjust="spacingAndGlyphs">network</text>
+<text x="24.4" y="161.68" fill="#6e6a86" xml:space="preserve" textLength="25.2" lengthAdjust="spacingAndGlyphs">ram</text>
+<text x="83.2" y="161.68" fill="#e4e0ee" xml:space="preserve" textLength="142.8" lengthAdjust="spacingAndGlyphs">2.3 GiB / 7.7 GiB</text>
+<text x="360.4" y="161.68" fill="#60a5fa" xml:space="preserve" textLength="33.6" lengthAdjust="spacingAndGlyphs">↓ rx</text>
+<text x="402.4" y="161.68" fill="#e4e0ee" xml:space="preserve" textLength="84" lengthAdjust="spacingAndGlyphs">14.9 MiB/s</text>
+<text x="528.4" y="161.68" fill="#f472b6" xml:space="preserve" textLength="33.6" lengthAdjust="spacingAndGlyphs">↑ tx</text>
+<text x="570.4" y="161.68" fill="#e4e0ee" xml:space="preserve" textLength="75.6" lengthAdjust="spacingAndGlyphs">2.4 MiB/s</text>
+<text x="24.4" y="179.68" fill="#6e6a86" xml:space="preserve" textLength="33.6" lengthAdjust="spacingAndGlyphs">swap</text>
+<text x="74.8" y="179.68" fill="#e4e0ee" xml:space="preserve" textLength="151.2" lengthAdjust="spacingAndGlyphs">25.6 MiB / 1.0 GiB</text>
+<text x="24.4" y="197.68" fill="#6e6a86" xml:space="preserve" textLength="310.8" lengthAdjust="spacingAndGlyphs">32 processes · 6 cores (6 physical) ·</text>
+<text x="32.8" y="233.68" fill="#a78bfa" class="b" xml:space="preserve" textLength="92.4" lengthAdjust="spacingAndGlyphs">storage 1/1</text>
+<text x="368.8" y="233.68" fill="#a78bfa" class="b" xml:space="preserve" textLength="126" lengthAdjust="spacingAndGlyphs">zfs arc 3.0 GiB</text>
+<text x="24.4" y="251.68" fill="#6e6a86" xml:space="preserve" textLength="16.8" lengthAdjust="spacingAndGlyphs">io</text>
+<text x="49.6" y="251.68" fill="#60a5fa" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">↓</text>
+<text x="66.4" y="251.68" fill="#e4e0ee" xml:space="preserve" textLength="42" lengthAdjust="spacingAndGlyphs">0 B/s</text>
+<text x="125.2" y="251.68" fill="#f472b6" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">↑</text>
+<text x="142" y="251.68" fill="#e4e0ee" xml:space="preserve" textLength="84" lengthAdjust="spacingAndGlyphs">16.1 MiB/s</text>
+<text x="360.4" y="251.68" fill="#6e6a86" xml:space="preserve" textLength="33.6" lengthAdjust="spacingAndGlyphs">size</text>
+<text x="402.4" y="251.68" fill="#e4e0ee" xml:space="preserve" textLength="58.8" lengthAdjust="spacingAndGlyphs">3.0 GiB</text>
+<text x="469.6" y="251.68" fill="#6e6a86" xml:space="preserve" textLength="67.2" lengthAdjust="spacingAndGlyphs">/ target</text>
+<text x="545.2" y="251.68" fill="#e4e0ee" xml:space="preserve" textLength="58.8" lengthAdjust="spacingAndGlyphs">3.5 GiB</text>
+<text x="24.4" y="269.68" fill="#e4e0ee" xml:space="preserve" textLength="42" lengthAdjust="spacingAndGlyphs">/data</text>
+<text x="142" y="269.68" fill="#3a374a" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">·</text>
+<text x="167.2" y="269.68" fill="#e4e0ee" xml:space="preserve" textLength="25.2" lengthAdjust="spacingAndGlyphs">83%</text>
+<text x="200.8" y="269.68" fill="#6e6a86" xml:space="preserve" textLength="142.8" lengthAdjust="spacingAndGlyphs">52.1 GiB/62.7 GiB</text>
+<text x="360.4" y="269.68" fill="#6e6a86" xml:space="preserve" textLength="25.2" lengthAdjust="spacingAndGlyphs">hit</text>
+<text x="394" y="269.68" fill="#e4e0ee" xml:space="preserve" textLength="42" lengthAdjust="spacingAndGlyphs">88.7%</text>
+<text x="452.8" y="269.68" fill="#6e6a86" xml:space="preserve" textLength="16.8" lengthAdjust="spacingAndGlyphs">io</text>
+<text x="478" y="269.68" fill="#e4e0ee" xml:space="preserve" textLength="33.6" lengthAdjust="spacingAndGlyphs">1.5%</text>
+<text x="528.4" y="269.68" fill="#6e6a86" xml:space="preserve" textLength="33.6" lengthAdjust="spacingAndGlyphs">miss</text>
+<text x="570.4" y="269.68" fill="#e4e0ee" xml:space="preserve" textLength="33.6" lengthAdjust="spacingAndGlyphs">9.9%</text>
+<text x="32.8" y="305.68" fill="#a78bfa" class="b" xml:space="preserve" textLength="218.4" lengthAdjust="spacingAndGlyphs">processes 32/32 · sort cpu</text>
+<text x="66.4" y="323.68" fill="#6e6a86" class="b" xml:space="preserve" textLength="25.2" lengthAdjust="spacingAndGlyphs">PID</text>
+<text x="100" y="323.68" fill="#6e6a86" class="b" xml:space="preserve" textLength="33.6" lengthAdjust="spacingAndGlyphs">USER</text>
+<text x="175.6" y="323.68" fill="#6e6a86" class="b" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">S</text>
+<text x="200.8" y="323.68" fill="#6e6a86" class="b" xml:space="preserve" textLength="25.2" lengthAdjust="spacingAndGlyphs">THR</text>
+<text x="234.4" y="323.68" fill="#f472b6" class="b" xml:space="preserve" textLength="50.4" lengthAdjust="spacingAndGlyphs">CPU% ▼</text>
+<text x="352" y="323.68" fill="#6e6a86" class="b" xml:space="preserve" textLength="25.2" lengthAdjust="spacingAndGlyphs">MEM</text>
+<text x="385.6" y="323.68" fill="#6e6a86" class="b" xml:space="preserve" textLength="33.6" lengthAdjust="spacingAndGlyphs">NAME</text>
+<text x="74.8" y="341.68" fill="#6e6a86" class="b" xml:space="preserve" textLength="16.8" lengthAdjust="spacingAndGlyphs">18</text>
+<text x="100" y="341.68" fill="#e4e0ee" class="b" xml:space="preserve" textLength="33.6" lengthAdjust="spacingAndGlyphs">root</text>
+<text x="175.6" y="341.68" fill="#a78bfa" class="b" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">R</text>
+<text x="217.6" y="341.68" fill="#e4e0ee" class="b" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">1</text>
+<text x="242.8" y="341.68" fill="#f472b6" class="b" xml:space="preserve" textLength="42" lengthAdjust="spacingAndGlyphs">101.0</text>
+<text x="301.6" y="341.68" fill="#e4e0ee" class="b" xml:space="preserve" textLength="109.2" lengthAdjust="spacingAndGlyphs">828.0 KiB yes</text>
+<text x="74.8" y="359.68" fill="#6e6a86" xml:space="preserve" textLength="16.8" lengthAdjust="spacingAndGlyphs">20</text>
+<text x="100" y="359.68" fill="#e4e0ee" xml:space="preserve" textLength="33.6" lengthAdjust="spacingAndGlyphs">root</text>
+<text x="175.6" y="359.68" fill="#a78bfa" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">R</text>
+<text x="217.6" y="359.68" fill="#e4e0ee" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">1</text>
+<text x="242.8" y="359.68" fill="#f472b6" xml:space="preserve" textLength="42" lengthAdjust="spacingAndGlyphs">101.0</text>
+<text x="301.6" y="359.68" fill="#e4e0ee" xml:space="preserve" textLength="109.2" lengthAdjust="spacingAndGlyphs">764.0 KiB yes</text>
+<text x="58" y="377.68" fill="#6e6a86" xml:space="preserve" textLength="33.6" lengthAdjust="spacingAndGlyphs">2047</text>
+<text x="100" y="377.68" fill="#e4e0ee" xml:space="preserve" textLength="33.6" lengthAdjust="spacingAndGlyphs">root</text>
+<text x="175.6" y="377.68" fill="#a78bfa" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">R</text>
+<text x="217.6" y="377.68" fill="#e4e0ee" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">1</text>
+<text x="242.8" y="377.68" fill="#f472b6" xml:space="preserve" textLength="42" lengthAdjust="spacingAndGlyphs">100.0</text>
+<text x="301.6" y="377.68" fill="#e4e0ee" xml:space="preserve" textLength="109.2" lengthAdjust="spacingAndGlyphs">768.0 KiB yes</text>
+<text x="74.8" y="395.68" fill="#6e6a86" xml:space="preserve" textLength="16.8" lengthAdjust="spacingAndGlyphs">40</text>
+<text x="100" y="395.68" fill="#e4e0ee" xml:space="preserve" textLength="33.6" lengthAdjust="spacingAndGlyphs">root</text>
+<text x="175.6" y="395.68" fill="#6e6a86" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">S</text>
+<text x="217.6" y="395.68" fill="#e4e0ee" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">1</text>
+<text x="259.6" y="395.68" fill="#60a5fa" xml:space="preserve" textLength="25.2" lengthAdjust="spacingAndGlyphs">2.0</text>
+<text x="301.6" y="395.68" fill="#e4e0ee" xml:space="preserve" textLength="100.8" lengthAdjust="spacingAndGlyphs">988.0 KiB nc</text>
+<text x="83.2" y="413.68" fill="#6e6a86" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">1</text>
+<text x="100" y="413.68" fill="#e4e0ee" xml:space="preserve" textLength="33.6" lengthAdjust="spacingAndGlyphs">root</text>
+<text x="175.6" y="413.68" fill="#6e6a86" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">S</text>
+<text x="217.6" y="413.68" fill="#e4e0ee" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">1</text>
+<text x="259.6" y="413.68" fill="#60a5fa" xml:space="preserve" textLength="25.2" lengthAdjust="spacingAndGlyphs">0.0</text>
+<text x="301.6" y="413.68" fill="#e4e0ee" xml:space="preserve" textLength="176.4" lengthAdjust="spacingAndGlyphs">504.0 KiB docker-init</text>
+<text x="83.2" y="431.68" fill="#6e6a86" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">7</text>
+<text x="100" y="431.68" fill="#e4e0ee" xml:space="preserve" textLength="33.6" lengthAdjust="spacingAndGlyphs">root</text>
+<text x="175.6" y="431.68" fill="#6e6a86" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">S</text>
+<text x="217.6" y="431.68" fill="#e4e0ee" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">1</text>
+<text x="259.6" y="431.68" fill="#60a5fa" xml:space="preserve" textLength="25.2" lengthAdjust="spacingAndGlyphs">0.0</text>
+<text x="301.6" y="431.68" fill="#e4e0ee" xml:space="preserve" textLength="126" lengthAdjust="spacingAndGlyphs">832.0 KiB sleep</text>
+<text x="24.4" y="467.68" fill="#a78bfa" class="b" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">q</text>
+<text x="41.2" y="467.68" fill="#6e6a86" xml:space="preserve" textLength="33.6" lengthAdjust="spacingAndGlyphs">quit</text>
+<text x="91.6" y="467.68" fill="#a78bfa" class="b" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">?</text>
+<text x="108.4" y="467.68" fill="#6e6a86" xml:space="preserve" textLength="33.6" lengthAdjust="spacingAndGlyphs">help</text>
+<text x="158.8" y="467.68" fill="#a78bfa" class="b" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">s</text>
+<text x="175.6" y="467.68" fill="#6e6a86" xml:space="preserve" textLength="33.6" lengthAdjust="spacingAndGlyphs">sort</text>
+<text x="226" y="467.68" fill="#a78bfa" class="b" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">/</text>
+<text x="242.8" y="467.68" fill="#6e6a86" xml:space="preserve" textLength="50.4" lengthAdjust="spacingAndGlyphs">filter</text>
+<text x="310" y="467.68" fill="#a78bfa" class="b" xml:space="preserve" textLength="42" lengthAdjust="spacingAndGlyphs">space</text>
+<text x="360.4" y="467.68" fill="#6e6a86" xml:space="preserve" textLength="42" lengthAdjust="spacingAndGlyphs">pause</text>
+<text x="419.2" y="467.68" fill="#a78bfa" class="b" xml:space="preserve" textLength="25.2" lengthAdjust="spacingAndGlyphs">+/-</text>
+<text x="452.8" y="467.68" fill="#6e6a86" xml:space="preserve" textLength="159.6" lengthAdjust="spacingAndGlyphs">interval · 1 hidden</text>
+</svg>

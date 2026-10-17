@@ -1,0 +1,35 @@
+[package]
+name = "rtop"
+version = "0.2.0"
+edition = "2024"
+# The lowest Rust that builds rtop: sysinfo 0.39 needs 1.95 (checked with rust:1.95-alpine).
+rust-version = "1.95"
+description = "A small, fast terminal system monitor with ZFS ARC, storage, sensors and a process tree"
+license = "MIT"
+repository = "https://github.com/DarkWaveLabs/rtop"
+readme = "README.md"
+keywords = ["system-monitor", "tui", "zfs", "top", "terminal"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+anyhow = "1.0.104"
+ratatui = "0.30.2"
+sysinfo = "0.39.6"
+
+[target.'cfg(any(target_os = "macos", target_os = "freebsd"))'.dependencies]
+libc = "0.2.190"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFArray", "CFBase", "CFDictionary", "CFNumber", "CFString"] }
+objc2-io-kit = { version = "0.3.2", default-features = false, features = ["std", "libc", "ps"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_System_Power", "Win32_System_Threading"] }
+
+[profile.release]
+# Size over speed: rtop spends its time in syscalls, and "s" cuts the binary by about
+# 115 KiB with no CPU change we could measure (round 1 size budget, design section 4).
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true

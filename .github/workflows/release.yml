@@ -1,0 +1,104 @@
+# Builds rtop for each platform on a native runner.
+# A `v*` tag publishes a GitHub release; a manual run only uploads artifacts.
+# macOS and Windows use GitHub-hosted runners (Blacksmith is Linux only),
+# so this workflow does not run on every push.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64-musl
+            runner: blacksmith-2vcpu-ubuntu-2404
+            targets: x86_64-unknown-linux-musl
+          - name: linux-aarch64-musl
+            runner: blacksmith-2vcpu-ubuntu-2404-arm
+            targets: aarch64-unknown-linux-musl
+          - name: macos-universal
+            runner: macos-latest
+            targets: aarch64-apple-darwin,x86_64-apple-darwin
+          - name: windows-x86_64.exe
+            runner: windows-latest
+            targets: x86_64-pc-windows-msvc
+            components: llvm-tools
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: ${{ matrix.targets }}
+          components: ${{ matrix.components }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ${{ matrix.name }}
+
+      - name: Build (Linux, static musl)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q musl-tools
+          cargo build --release --locked --target ${{ matrix.targets }}
+          mkdir dist && cp target/${{ matrix.targets }}/release/rtop dist/rtop-${{ matrix.name }}
+          file dist/*
+
+      - name: Build (macOS, universal)
+        if: runner.os == 'macOS'
+        run: |
+          cargo build --release --locked --target aarch64-apple-darwin
+          cargo build --release --locked --target x86_64-apple-darwin
+          mkdir dist && lipo -create -output dist/rtop-${{ matrix.name }} \
+            target/aarch64-apple-darwin/release/rtop target/x86_64-apple-darwin/release/rtop
+          lipo -info dist/*
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          cargo build --release --locked --target ${{ matrix.targets }}
+          mkdir dist && cp target/${{ matrix.targets }}/release/rtop.exe dist/rtop-${{ matrix.name }}
+          # .cargo/config.toml links the C runtime statically. Fail if the exe needs VCRUNTIME140.dll again.
+          objdump="$(rustc --print sysroot)/lib/rustlib/${{ matrix.targets }}/bin/llvm-objdump.exe"
+          "$objdump" -p dist/rtop-${{ matrix.name }} | grep -i "DLL Name" | sort -u
+          if "$objdump" -p dist/rtop-${{ matrix.name }} | grep -qi vcruntime; then
+            echo "::error::rtop.exe links VCRUNTIME140.dll; it will not start without the VC++ Redistributable"
+            exit 1
+          fi
+
+      - name: Smoke test
+        shell: bash
+        run: ./dist/rtop-${{ matrix.name }} --help
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rtop-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist && sha256sum rtop-* > SHA256SUMS && cat SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" rtop-* SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --title "rtop $GITHUB_REF_NAME" --generate-notes

@@ -1,0 +1,85 @@
+name: Bug report
+description: rtop shows a wrong value, crashes, hangs or draws badly.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the report. For a security problem, do not use this form. Use [private vulnerability reporting](https://github.com/DarkWaveLabs/rtop/security/advisories/new).
+  - type: input
+    id: version
+    attributes:
+      label: rtop version
+      description: The output of `rtop --version`, or the commit hash if you built from source.
+      placeholder: rtop 0.2.0
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - FreeBSD
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: os-version
+    attributes:
+      label: OS version and architecture
+      description: For example `Ubuntu 24.04 x86_64`, `macOS 15.4 arm64`, `Windows 11 x86_64`, `FreeBSD 14.2 amd64`.
+    validations:
+      required: true
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal
+      description: The terminal emulator and its size, and tmux or screen if you use one. For example `kitty 0.39, 120x40, in tmux`.
+    validations:
+      required: true
+  - type: input
+    id: install
+    attributes:
+      label: How you installed rtop
+      description: A release binary (which one), `cargo install`, or a build from source.
+  - type: input
+    id: zfs
+    attributes:
+      label: ZFS version (for ZFS ARC problems)
+      description: The output of `zfs version` (Linux, FreeBSD, macOS). Leave empty if the bug is not about ZFS.
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The command line, the keys you pressed, and your config file if you use one.
+      placeholder: |
+        1. Run `rtop --tree`
+        2. Press `5`
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: Include any error text. A screenshot helps for a drawing problem. For a wrong value, show what another tool (`top`, `free`, `df`, `arc_summary`) reports.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched the open and closed issues for this problem.
+          required: true
+        - label: I removed private data (host names, user names, paths) from the text and screenshots.
+          required: false
