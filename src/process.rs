@@ -10,18 +10,23 @@ use std::ffi::OsStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-#[cfg(any(test, not(target_os = "macos")))]
+#[cfg(any(test, not(any(target_os = "macos", target_os = "linux"))))]
 use sysinfo::ProcessStatus;
 
-// macOS reads processes natively; every other OS goes through `sysinfo`. The tests on
-// macOS still build the `sysinfo` collector, as the reference for the parity test.
+// macOS and Linux read processes natively; Windows and FreeBSD go through `sysinfo`. The
+// tests still build the `sysinfo` collector on every OS, as the reference for the parity
+// tests, and build the Linux collector's pure parts on every OS.
+#[cfg(any(test, target_os = "linux"))]
+mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::ProcCollector;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
 pub use macos::ProcCollector;
-#[cfg(any(test, not(target_os = "macos")))]
+#[cfg(any(test, not(any(target_os = "macos", target_os = "linux"))))]
 mod sysinfo_procs;
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub use sysinfo_procs::ProcCollector;
 
 /// The longest command line that rtop keeps, in chars.
@@ -57,7 +62,7 @@ pub enum ProcState {
 impl ProcState {
     /// Maps the `sysinfo` status. Exact table below. Called on every OS whose collector
     /// is `sysinfo`.
-    #[cfg(any(test, not(target_os = "macos")))]
+    #[cfg(any(test, not(any(target_os = "macos", target_os = "linux"))))]
     pub fn from_sysinfo(status: sysinfo::ProcessStatus) -> Self {
         match status {
             ProcessStatus::Run => ProcState::Run,
@@ -356,10 +361,6 @@ pub(crate) fn io_rate(delta: u64, secs: f64, first: bool) -> u64 {
 /// (a sample that spans a late tick cannot show more than every core). 0 for a `secs`
 /// that is not a positive number.
 #[cfg(any(test, target_os = "linux", target_os = "macos"))]
-#[cfg_attr(
-    all(target_os = "linux", not(test)),
-    expect(dead_code, reason = "the native Linux collector (W4) uses it")
-)]
 pub(crate) fn cpu_percent(delta_ns: u64, secs: f64, cpus: usize) -> f32 {
     if !(secs.is_finite() && secs > 0.0) {
         return 0.0;
@@ -371,10 +372,6 @@ pub(crate) fn cpu_percent(delta_ns: u64, secs: f64, cpus: usize) -> f32 {
 /// User names by real UID, for the native collectors. A miss reloads the list, at most
 /// once each `USERS_RELOAD`.
 #[cfg(any(test, target_os = "linux", target_os = "macos"))]
-#[cfg_attr(
-    all(target_os = "linux", not(test)),
-    expect(dead_code, reason = "the native Linux collector (W4) uses it")
-)]
 #[derive(Default)]
 pub(crate) struct UserNames {
     names: HashMap<u32, Arc<str>>,
@@ -382,10 +379,6 @@ pub(crate) struct UserNames {
 }
 
 #[cfg(any(test, target_os = "linux", target_os = "macos"))]
-#[cfg_attr(
-    all(target_os = "linux", not(test)),
-    expect(dead_code, reason = "the native Linux collector (W4) uses it")
-)]
 impl UserNames {
     pub(crate) fn get(&self, uid: u32) -> Option<Arc<str>> {
         self.names.get(&uid).cloned()
@@ -411,10 +404,6 @@ impl UserNames {
 
 /// The user list of this machine, by UID, for `UserNames::reload_after_miss`.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-#[cfg_attr(
-    target_os = "linux",
-    expect(dead_code, reason = "the native Linux collector (W4) uses it")
-)]
 pub(crate) fn system_user_names() -> HashMap<u32, Arc<str>> {
     sysinfo::Users::new_with_refreshed_list()
         .list()
@@ -463,8 +452,8 @@ pub enum KillError {
     Gone,
     /// `kill_with` returned `None`.
     #[cfg_attr(
-        target_os = "macos",
-        allow(dead_code, reason = "macOS sends every signal")
+        any(target_os = "macos", target_os = "linux"),
+        allow(dead_code, reason = "the native collectors send every signal")
     )]
     Unsupported,
     /// `kill_with` returned `Some(false)`.

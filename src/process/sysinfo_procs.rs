@@ -1,6 +1,7 @@
 //! The process collector and kill on top of `sysinfo`, for every OS without a native
-//! collector. Here `ProcInfo::ident` is the start time in seconds since the epoch.
-//! macOS builds it only for its tests, as the reference for the native collector.
+//! collector (Windows and FreeBSD). Here `ProcInfo::ident` is the start time in seconds
+//! since the epoch. macOS and Linux build it only for their tests, as the reference for
+//! the native collectors.
 
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
@@ -17,14 +18,15 @@ use super::{
 };
 
 /// The refresh kind for `refresh_processes_specifics`.
-/// Every tick: memory, cpu, disk_usage, tasks, user(OnlyIfNotSet).
+/// Every tick: memory, cpu, disk_usage, user(OnlyIfNotSet), and no task list (`nothing()`
+/// turns it on; only Linux reads it, and rtop counts no threads here).
 /// Slow ticks add cmd(OnlyIfNotSet). `exe` is never refreshed: rtop does not read it.
 fn refresh_kind(slow: bool) -> ProcessRefreshKind {
     let kind = ProcessRefreshKind::nothing()
+        .without_tasks()
         .with_memory()
         .with_cpu()
         .with_disk_usage()
-        .with_tasks()
         .with_user(UpdateKind::OnlyIfNotSet);
     if slow {
         kind.with_cmd(UpdateKind::OnlyIfNotSet)
@@ -38,7 +40,6 @@ struct Known {
     start_time: u64,
     name: Arc<str>,
     cmd: Arc<str>,
-    threads: Option<u32>,
 }
 
 impl Known {
@@ -47,12 +48,11 @@ impl Known {
             start_time,
             name: Arc::from(name),
             cmd: Arc::from(""),
-            threads: None,
         }
     }
 }
 
-/// Owned by the sampler. Caches names, command lines, user names and thread counts.
+/// Owned by the sampler. Caches names, command lines and user names.
 #[derive(Default)]
 pub struct ProcCollector {
     known: HashMap<u32, Known>,
@@ -66,7 +66,7 @@ impl ProcCollector {
     }
 
     /// Refreshes the processes in `sys` and builds the list.
-    /// Skips Linux threads (`thread_kind().is_some()`).
+    /// Skips threads (`thread_kind().is_some()`): Linux kernel threads, in the tests there.
     pub fn collect(&mut self, sys: &mut System, secs: f64, slow: bool) -> Vec<ProcInfo> {
         sys.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh_kind(slow));
         let processes: Vec<&sysinfo::Process> = sys
@@ -107,11 +107,6 @@ impl ProcCollector {
                     known.cmd = Arc::from(cmd);
                 }
             }
-            #[cfg(target_os = "linux")]
-            {
-                known.threads = linux_threads(p.tasks().map(|tasks| tasks.len()));
-            }
-
             let disk = p.disk_usage();
             out.push(ProcInfo {
                 pid,
@@ -121,7 +116,7 @@ impl ProcCollector {
                 cmd: Arc::clone(&known.cmd),
                 user: p.user_id().and_then(|uid| self.users.get(uid)).cloned(),
                 state: ProcState::from_sysinfo(p.status()),
-                threads: known.threads,
+                threads: None,
                 cpu: p.cpu_usage(),
                 memory: p.memory(),
                 read_rate: io_rate(disk.read_bytes, secs, first),
@@ -164,12 +159,6 @@ impl ProcCollector {
             .collect();
         self.users_loaded = Some(Instant::now());
     }
-}
-
-/// Pure. `sysinfo` leaves the main thread out of the Linux task list, so add it back.
-#[cfg(any(test, target_os = "linux"))]
-fn linux_threads(tasks: Option<usize>) -> Option<u32> {
-    tasks.map(|n| u32::try_from(n).unwrap_or(u32::MAX).saturating_add(1))
 }
 
 /// Not `kill_with`: on Windows `sysinfo` runs `taskkill.exe` by bare name, which Windows
@@ -274,19 +263,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn linux_threads_adds_the_main_thread() {
-        assert_eq!(linux_threads(Some(0)), Some(1));
-        assert_eq!(linux_threads(Some(3)), Some(4));
-        assert_eq!(linux_threads(None), None);
-    }
-
-    #[test]
     fn refresh_kind_fast_tick() {
         let kind = refresh_kind(false);
         assert_eq!(kind.cmd(), UpdateKind::Never);
         assert_eq!(kind.exe(), UpdateKind::Never);
         assert_eq!(kind.user(), UpdateKind::OnlyIfNotSet);
-        assert!(kind.memory() && kind.cpu() && kind.disk_usage() && kind.tasks());
+        assert!(kind.memory() && kind.cpu() && kind.disk_usage());
+        assert!(!kind.tasks(), "no thread list");
         assert_eq!(kind.cwd(), UpdateKind::Never);
         assert_eq!(kind.environ(), UpdateKind::Never);
         assert_eq!(kind.root(), UpdateKind::Never);
@@ -298,7 +281,8 @@ mod tests {
         assert_eq!(kind.cmd(), UpdateKind::OnlyIfNotSet);
         assert_eq!(kind.exe(), UpdateKind::Never);
         assert_eq!(kind.user(), UpdateKind::OnlyIfNotSet);
-        assert!(kind.memory() && kind.cpu() && kind.disk_usage() && kind.tasks());
+        assert!(kind.memory() && kind.cpu() && kind.disk_usage());
+        assert!(!kind.tasks());
     }
 
     #[test]
@@ -442,8 +426,6 @@ mod tests {
         assert!(me.ident > 0);
         assert_eq!((me.read_rate, me.write_rate), (0, 0), "first sample");
         assert!(!me.cmd.is_empty(), "slow tick reads the command line");
-        #[cfg(target_os = "linux")]
-        assert!(me.threads.unwrap_or(0) >= 1, "threads: {:?}", me.threads);
         let users = sysinfo::Users::new_with_refreshed_list();
         let expected = sys
             .process(Pid::from_u32(me.pid))

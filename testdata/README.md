@@ -6,6 +6,7 @@ Test fixtures. Tests load them with `include_str!`, so no test reads the real ma
 |---|---|
 | `arcstats-2.2.txt` | A ZFS ARC kstat file in the OpenZFS 2.2 format (`/proc/spl/kstat/zfs/arcstats`). |
 | `arcstats-2.2-next.txt` | The same file one sample later, with higher hit and miss counters. Tests use the pair to check the rate and hit-ratio maths. |
+| `proc/` | Synthetic Linux `/proc/<pid>/` files for `src/process/linux.rs`: `stat` of a process whose name holds spaces and `)`, of a kernel thread and of a zombie; `io`; `status` with a `Uid:` line whose real and effective UIDs differ; `cmdline` with empty arguments and white space. A missing `io` is a test with no file. |
 
 The two files are **synthetic**. They are not a capture from a real host. The values are chosen so the test arithmetic is exact, and rows that rtop does not read are kept to test that unknown names are skipped. Design Appendix A (`docs/designs/features/2026-10-16-rtop-feature-round-1.md`) describes them.
 
