@@ -1321,6 +1321,40 @@ mod tests {
         assert!(me.cpu > 20.0, "busy test thread: {}%", me.cpu);
     }
 
+    /// A child that exited but is not reaped yet is a zombie: `cmdline` is empty and `io`
+    /// may fail. It is listed with state `Z`, as `sysinfo` lists it.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn unreaped_child_is_listed_as_a_zombie() {
+        use std::time::Duration;
+
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let pid = child.id();
+        let mut live = Live::default();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let state = |live: &mut Live| {
+            live.read(pid, ProcFile::Stat)
+                .ok()
+                .and_then(parse_stat)
+                .map(|(_, stat)| stat.state)
+        };
+        while state(&mut live) != Some(b'Z') && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let zombie = state(&mut live) == Some(b'Z');
+        let mut sys = sysinfo::System::new();
+        let mut collector = ProcCollector::new();
+        let first = collector.collect(&mut sys, 1.0, true);
+        let next = collector.collect(&mut sys, 1.0, false);
+        child.wait().unwrap();
+        assert!(zombie, "the child did not become a zombie in 5 s");
+        for rows in [&first, &next] {
+            let p = row_of(rows, pid);
+            assert_eq!(p.state, ProcState::Zombie);
+            assert_eq!(&*p.name, "true");
+        }
+    }
+
     /// The CPU cap counts the host's CPUs, not the ones rtop may run on. A thread pinned to
     /// CPU 0 makes the collector as `taskset -c 0 rtop` would.
     #[cfg(target_os = "linux")]
