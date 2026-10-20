@@ -1,21 +1,20 @@
 //! The process collector and kill on top of `sysinfo`, for every OS without a native
 //! collector. Here `ProcInfo::ident` is the start time in seconds since the epoch.
+//! macOS builds it only for its tests, as the reference for the native collector.
 
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
 #[cfg(not(windows))]
 use super::KillSignal;
 use super::{
-    KillError, KillReport, KillRequest, ProcInfo, ProcState, check_target, io_rate, join_cmd,
+    KillError, KillReport, KillRequest, ProcInfo, ProcState, USERS_RELOAD, check_target, io_rate,
+    join_cmd,
 };
-
-/// The shortest time between two reloads of the user list.
-const USERS_RELOAD: Duration = Duration::from_secs(60);
 
 /// The refresh kind for `refresh_processes_specifics`.
 /// Every tick: memory, cpu, disk_usage, tasks, user(OnlyIfNotSet).
@@ -112,10 +111,6 @@ impl ProcCollector {
             {
                 known.threads = linux_threads(p.tasks().map(|tasks| tasks.len()));
             }
-            #[cfg(target_os = "macos")]
-            if slow {
-                known.threads = macos_threads(pid);
-            }
 
             let disk = p.disk_usage();
             out.push(ProcInfo {
@@ -175,27 +170,6 @@ impl ProcCollector {
 #[cfg(any(test, target_os = "linux"))]
 fn linux_threads(tasks: Option<usize>) -> Option<u32> {
     tasks.map(|n| u32::try_from(n).unwrap_or(u32::MAX).saturating_add(1))
-}
-
-/// The thread count of one process, from `proc_pidinfo`. `None` when the call fails,
-/// for example for another user's process without root.
-#[cfg(target_os = "macos")]
-fn macos_threads(pid: u32) -> Option<u32> {
-    let pid = libc::pid_t::try_from(pid).ok()?;
-    let size = libc::c_int::try_from(std::mem::size_of::<libc::proc_taskinfo>()).ok()?;
-    // SAFETY: `proc_taskinfo` is a plain C struct of integers, so all zero bytes is a valid
-    // value. `proc_pidinfo` writes at most `size` bytes into `info`, which is exactly
-    // `size` bytes long and lives until the call returns.
-    let (written, info) = unsafe {
-        let mut info: libc::proc_taskinfo = std::mem::zeroed();
-        let written =
-            libc::proc_pidinfo(pid, libc::PROC_PIDTASKINFO, 0, (&raw mut info).cast(), size);
-        (written, info)
-    };
-    if written != size {
-        return None;
-    }
-    u32::try_from(info.pti_threadnum).ok()
 }
 
 /// Not `kill_with`: on Windows `sysinfo` runs `taskkill.exe` by bare name, which Windows
@@ -468,7 +442,7 @@ mod tests {
         assert!(me.ident > 0);
         assert_eq!((me.read_rate, me.write_rate), (0, 0), "first sample");
         assert!(!me.cmd.is_empty(), "slow tick reads the command line");
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        #[cfg(target_os = "linux")]
         assert!(me.threads.unwrap_or(0) >= 1, "threads: {:?}", me.threads);
         let users = sysinfo::Users::new_with_refreshed_list();
         let expected = sys

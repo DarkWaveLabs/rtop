@@ -6,15 +6,28 @@
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::sync::Arc;
+use std::time::Duration;
 
+#[cfg(any(test, not(target_os = "macos")))]
 use sysinfo::ProcessStatus;
 
+// macOS reads processes natively; every other OS goes through `sysinfo`. The tests on
+// macOS still build the `sysinfo` collector, as the reference for the parity test.
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+pub use macos::ProcCollector;
+#[cfg(any(test, not(target_os = "macos")))]
 mod sysinfo_procs;
+#[cfg(not(target_os = "macos"))]
 pub use sysinfo_procs::ProcCollector;
 
 /// The longest command line that rtop keeps, in chars.
 const CMD_MAX_CHARS: usize = 4096;
+/// The shortest time between two reloads of the user list.
+const USERS_RELOAD: Duration = Duration::from_secs(60);
 /// Tree levels that the prefix draws. A deeper row shows `…` in place of the levels past
 /// this, so a long parent chain costs a fixed prefix size for each row, not one that grows
 /// with depth (a chain of N nested processes would otherwise cost about N² bytes).
@@ -24,17 +37,27 @@ const TREE_MAX_DEPTH: usize = 32;
 pub enum ProcState {
     Run,
     Sleep,
+    #[cfg_attr(
+        target_os = "macos",
+        allow(dead_code, reason = "the macOS collector never reports it")
+    )]
     DiskSleep,
     Stop,
     Zombie,
     Idle,
+    #[cfg_attr(
+        target_os = "macos",
+        allow(dead_code, reason = "the macOS collector never reports it")
+    )]
     Dead,
     #[default]
     Unknown,
 }
 
 impl ProcState {
-    /// Maps the `sysinfo` status. Exact table below. Called on every OS.
+    /// Maps the `sysinfo` status. Exact table below. Called on every OS whose collector
+    /// is `sysinfo`.
+    #[cfg(any(test, not(target_os = "macos")))]
     pub fn from_sysinfo(status: sysinfo::ProcessStatus) -> Self {
         match status {
             ProcessStatus::Run => ProcState::Run,
@@ -300,9 +323,9 @@ fn tree_rows<'a>(sorted: &[&'a ProcInfo]) -> Vec<ProcRow<'a>> {
 }
 
 /// Pure. Joins argv with spaces (lossy UTF-8) and cuts it to 4096 chars.
-pub fn join_cmd(parts: &[std::ffi::OsString]) -> String {
+pub fn join_cmd<S: AsRef<OsStr>>(parts: impl IntoIterator<Item = S>) -> String {
     let mut out = String::new();
-    for (i, part) in parts.iter().enumerate() {
+    for (i, part) in parts.into_iter().enumerate() {
         // A char is at most 4 bytes, so this many bytes already hold enough chars.
         if out.len() >= CMD_MAX_CHARS * 4 {
             break;
@@ -310,7 +333,7 @@ pub fn join_cmd(parts: &[std::ffi::OsString]) -> String {
         if i > 0 {
             out.push(' ');
         }
-        out.push_str(&part.to_string_lossy());
+        out.push_str(&part.as_ref().to_string_lossy());
     }
     if let Some((cut, _)) = out.char_indices().nth(CMD_MAX_CHARS) {
         out.truncate(cut);
@@ -327,6 +350,77 @@ pub(crate) fn io_rate(delta: u64, secs: f64, first: bool) -> u64 {
         // `as u64` saturates, and `max` maps NaN to the floor.
         (delta as f64 / secs.max(0.001)) as u64
     }
+}
+
+/// Pure. CPU time used over an interval as a percent of one core, capped at `cpus × 100`
+/// (a sample that spans a late tick cannot show more than every core). 0 for a `secs`
+/// that is not a positive number.
+#[cfg(any(test, target_os = "linux", target_os = "macos"))]
+#[cfg_attr(
+    all(target_os = "linux", not(test)),
+    expect(dead_code, reason = "the native Linux collector (W4) uses it")
+)]
+pub(crate) fn cpu_percent(delta_ns: u64, secs: f64, cpus: usize) -> f32 {
+    if !(secs.is_finite() && secs > 0.0) {
+        return 0.0;
+    }
+    let cap = cpus.max(1) as f64 * 100.0;
+    (delta_ns as f64 / (secs * 1e9) * 100.0).min(cap) as f32
+}
+
+/// User names by real UID, for the native collectors. A miss reloads the list, at most
+/// once each `USERS_RELOAD`.
+#[cfg(any(test, target_os = "linux", target_os = "macos"))]
+#[cfg_attr(
+    all(target_os = "linux", not(test)),
+    expect(dead_code, reason = "the native Linux collector (W4) uses it")
+)]
+#[derive(Default)]
+pub(crate) struct UserNames {
+    names: HashMap<u32, Arc<str>>,
+    loaded: Option<std::time::Instant>,
+}
+
+#[cfg(any(test, target_os = "linux", target_os = "macos"))]
+#[cfg_attr(
+    all(target_os = "linux", not(test)),
+    expect(dead_code, reason = "the native Linux collector (W4) uses it")
+)]
+impl UserNames {
+    pub(crate) fn get(&self, uid: u32) -> Option<Arc<str>> {
+        self.names.get(&uid).cloned()
+    }
+
+    /// Call after `get` missed. Replaces the names with `load()` unless the last load was
+    /// less than `USERS_RELOAD` before `now`. True when it reloaded.
+    pub(crate) fn reload_after_miss(
+        &mut self,
+        now: std::time::Instant,
+        load: impl FnOnce() -> HashMap<u32, Arc<str>>,
+    ) -> bool {
+        let due = self
+            .loaded
+            .is_none_or(|loaded| now.saturating_duration_since(loaded) >= USERS_RELOAD);
+        if due {
+            self.names = load();
+            self.loaded = Some(now);
+        }
+        due
+    }
+}
+
+/// The user list of this machine, by UID, for `UserNames::reload_after_miss`.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg_attr(
+    target_os = "linux",
+    expect(dead_code, reason = "the native Linux collector (W4) uses it")
+)]
+pub(crate) fn system_user_names() -> HashMap<u32, Arc<str>> {
+    sysinfo::Users::new_with_refreshed_list()
+        .list()
+        .iter()
+        .map(|user| (**user.id(), Arc::from(user.name())))
+        .collect()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -368,6 +462,10 @@ pub enum KillError {
     /// The PID is gone, or a new process has the PID now.
     Gone,
     /// `kill_with` returned `None`.
+    #[cfg_attr(
+        target_os = "macos",
+        allow(dead_code, reason = "macOS sends every signal")
+    )]
     Unsupported,
     /// `kill_with` returned `Some(false)`.
     Failed,
@@ -799,7 +897,9 @@ mod tests {
     fn join_cmd_joins_with_spaces() {
         let parts: Vec<OsString> = ["/bin/sh", "-c", "echo hi"].map(OsString::from).into();
         assert_eq!(join_cmd(&parts), "/bin/sh -c echo hi");
-        assert_eq!(join_cmd(&[]), "");
+        assert_eq!(join_cmd(Vec::<OsString>::new()), "");
+        let borrowed = ["a", "b"].map(std::ffi::OsStr::new);
+        assert_eq!(join_cmd(borrowed), "a b", "borrowed parts");
     }
 
     #[test]
@@ -867,6 +967,58 @@ mod tests {
         assert_eq!(io_rate(1_000, 0.5, false), 2_000);
         assert_eq!(io_rate(1_000, 0.0, false), 1_000_000, "secs floor 0.001");
         assert_eq!(io_rate(1_000, f64::NAN, false), 1_000_000, "NaN secs");
+    }
+
+    #[test]
+    fn cpu_percent_of_one_core_with_a_cap() {
+        assert_eq!(cpu_percent(500_000_000, 1.0, 4), 50.0);
+        assert_eq!(cpu_percent(500_000_000, 0.5, 4), 100.0);
+        assert_eq!(
+            cpu_percent(3_000_000_000, 1.0, 4),
+            300.0,
+            "three busy cores"
+        );
+        assert_eq!(
+            cpu_percent(9_000_000_000, 1.0, 4),
+            400.0,
+            "capped at cpus × 100"
+        );
+        assert_eq!(
+            cpu_percent(9_000_000_000, 1.0, 0),
+            100.0,
+            "no CPU count: one"
+        );
+        assert_eq!(cpu_percent(0, 1.0, 4), 0.0);
+        assert_eq!(cpu_percent(u64::MAX, 1.0, 2), 200.0);
+        for secs in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(cpu_percent(1_000, secs, 4), 0.0, "secs {secs}");
+        }
+    }
+
+    fn names(pairs: &[(u32, &str)]) -> HashMap<u32, Arc<str>> {
+        pairs
+            .iter()
+            .map(|&(uid, name)| (uid, Arc::from(name)))
+            .collect()
+    }
+
+    #[test]
+    fn user_names_reload_on_a_miss_at_most_once_a_minute() {
+        let start = std::time::Instant::now();
+        let mut users = UserNames::default();
+        assert_eq!(users.get(501), None, "nothing loaded");
+        assert!(users.reload_after_miss(start, || names(&[(501, "chad")])));
+        assert_eq!(users.get(501).as_deref(), Some("chad"));
+
+        let later = start + Duration::from_secs(59);
+        let reloaded = users.reload_after_miss(later, || panic!("too soon to reload"));
+        assert!(!reloaded);
+        assert_eq!(users.get(502), None, "the miss stays until the next reload");
+
+        let due = start + USERS_RELOAD;
+        assert!(users.reload_after_miss(due, || names(&[(502, "ann")])));
+        assert_eq!(users.get(502).as_deref(), Some("ann"));
+        assert_eq!(users.get(501), None, "a reload replaces the list");
     }
 
     #[test]
