@@ -257,7 +257,8 @@ impl Tick for Sampler {
 /// again, so a key press that changes the interval takes effect at once. While paused it
 /// samples nothing; on resume it takes one baseline sample and the next tick is one
 /// interval after it. A closed control channel only means that no more messages come:
-/// it then sleeps until the tick is due, and sampling goes on.
+/// it then sleeps until the tick is due, and sampling goes on (after a baseline sample
+/// when it closed while paused).
 fn wait_until_due(
     tick: &mut impl Tick,
     interval_ms: &AtomicU64,
@@ -293,6 +294,11 @@ fn wait_until_due(
                 paused = pause;
             }
             Err(RecvTimeoutError::Disconnected) => {
+                // Closed while paused: sampling resumes, so it needs a baseline as on resume.
+                if paused {
+                    tick.baseline();
+                    started = Instant::now();
+                }
                 if let Some(rest) = due.checked_sub(started.elapsed()) {
                     thread::sleep(rest);
                 }
@@ -789,13 +795,34 @@ mod tests {
 
     #[test]
     fn a_channel_that_closes_while_paused_lets_sampling_go_on() {
+        let tick = FakeTick::default();
         let (control, control_rx) = mpsc::channel();
         control.send(Control::Pause(true)).unwrap();
-        let (_, _, handle) = spawn_wait(FakeTick::default(), 20, control_rx);
+        let (_, _, handle) = spawn_wait(tick.clone(), 20, control_rx);
         thread::sleep(Duration::from_millis(50));
+        let closed = Instant::now();
         drop(control);
         let waited = handle.join().unwrap();
         assert!(waited < Duration::from_secs(2), "waited {waited:?}");
+        assert_eq!(
+            tick.baselines.load(Ordering::SeqCst),
+            1,
+            "a baseline sample, as on resume"
+        );
+        assert!(
+            closed.elapsed() >= Duration::from_millis(20),
+            "the next sample comes one interval after the baseline"
+        );
+    }
+
+    #[test]
+    fn a_channel_that_closes_while_running_takes_no_baseline() {
+        let tick = FakeTick::default();
+        let (control, control_rx) = mpsc::channel::<Control>();
+        drop(control);
+        let (_, _, handle) = spawn_wait(tick.clone(), 20, control_rx);
+        handle.join().unwrap();
+        assert_eq!(tick.baselines.load(Ordering::SeqCst), 0);
     }
 
     #[test]
