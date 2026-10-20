@@ -383,7 +383,11 @@ impl State {
                     io_rate(now.1.saturating_sub(last.1), secs, first),
                 )
             }
-            None => (0, 0),
+            None => {
+                // Start again from the next good read, so no rate spans the gap.
+                *io = None;
+                (0, 0)
+            }
         };
         if slow
             && known.cmd.is_empty()
@@ -1267,6 +1271,31 @@ mod tests {
         // An idle process shows 0%, not its last value.
         let idle = s.collect(&mut k, &[10], 1.0, false);
         assert_eq!(row(&idle, 10).cpu, 0.0);
+    }
+
+    #[test]
+    fn failed_io_read_drops_the_baseline() {
+        let mut k = Fake::default();
+        k.readable(10, 77, "zsh");
+        let mut s = state();
+        s.collect(&mut k, &[10], 1.0, false);
+        k.io.remove(&10);
+        let gap = s.collect(&mut k, &[10], 1.0, false);
+        assert_eq!(row(&gap, 10).read_rate, 0, "failed read");
+        // Three ticks of I/O since the baseline: not a rate over one tick.
+        k.io.insert(10, (3_100, 3_200));
+        let next = s.collect(&mut k, &[10], 1.0, false);
+        assert_eq!(
+            (row(&next, 10).read_rate, row(&next, 10).write_rate),
+            (0, 0),
+            "first good read after a gap"
+        );
+        k.io.insert(10, (4_100, 3_700));
+        let next = s.collect(&mut k, &[10], 1.0, false);
+        assert_eq!(
+            (row(&next, 10).read_rate, row(&next, 10).write_rate),
+            (1_000, 500)
+        );
     }
 
     #[test]
