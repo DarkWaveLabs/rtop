@@ -1,14 +1,14 @@
 //! The sampler thread. It owns the `sysinfo` handles, and it sends one
 //! [`Snapshot`] to the UI thread on each tick.
 //!
-//! No state is shared and there are no locks. The only shared value is the
-//! interval, which is an atomic. The compiler proves the rest is safe: a
-//! `Snapshot` is moved into the channel, so the two threads can never touch
-//! the same data at the same time.
+//! No state is shared and there are no locks. The only shared values are the
+//! interval and the set of panels the UI drew last, which are atomics. The
+//! compiler proves the rest is safe: a `Snapshot` is moved into the channel, so
+//! the two threads can never touch the same data at the same time.
 
 use std::io;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -19,8 +19,9 @@ use sysinfo::{MINIMUM_CPU_UPDATE_INTERVAL, System};
 
 use crate::app::Event;
 use crate::net::{self, NetIface};
+use crate::panel::{PanelId, PanelSet};
 use crate::process::{KillReport, KillRequest, ProcCollector};
-use crate::sensors::{SensorCollector, Sensors};
+use crate::sensors::{SensorCollector, Sensors, TempWork};
 use crate::storage::{Storage, StorageCollector};
 use crate::zfs::{ZfsArc, ZfsCollector};
 
@@ -74,9 +75,12 @@ pub struct Snapshot {
     pub sensors: Sensors,
 }
 
-/// How often the slow work runs: the disk list and space, sensors, battery, the user list,
-/// command lines and macOS thread counts.
+/// How often the slow work runs: the disk list, the battery, the user list, command lines
+/// and macOS thread counts. Also how often the drawn sensors panel reads its hottest sensors.
 const SLOW_PERIOD: Duration = Duration::from_secs(5);
+
+/// How often the full sensor scan and the space of all disks run, while their panel is drawn.
+const SCAN_PERIOD: Duration = Duration::from_secs(30);
 
 /// A message from the UI thread to the sampler.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -91,15 +95,19 @@ pub enum Control {
 /// Starts the sampler thread. It stops by itself when the UI drops the receiver.
 /// It also sends the kill requests that come in on `control`, and reports each one as
 /// [`Event::KillDone`].
+///
+/// `drawn` is the `PanelSet` bit mask of the panels the UI drew last. The sampler reads it
+/// at the start of each tick, and skips some slow work for panels that are not drawn.
 pub fn spawn_sampler(
     tx: Sender<Event>,
     interval_ms: Arc<AtomicU64>,
+    drawn: Arc<AtomicU16>,
     control: Receiver<Control>,
 ) -> io::Result<()> {
     thread::Builder::new()
         .name("sampler".into())
         .spawn(move || {
-            let mut sampler = Sampler::new();
+            let mut sampler = Sampler::new(drawn);
             // CPU usage is a delta between two refreshes, so the first reading needs a short gap.
             thread::sleep(MINIMUM_CPU_UPDATE_INTERVAL);
             loop {
@@ -126,7 +134,9 @@ struct Sampler {
     #[cfg(target_os = "linux")]
     networks: net::SysfsNet,
     last: Instant,
-    last_slow: Option<Instant>,
+    clocks: Clocks,
+    /// The panels the UI drew last, as `PanelSet` bits.
+    drawn: Arc<AtomicU16>,
     procs: ProcCollector,
     storage: StorageCollector,
     zfs: ZfsCollector,
@@ -134,7 +144,7 @@ struct Sampler {
 }
 
 impl Sampler {
-    fn new() -> Self {
+    fn new(drawn: Arc<AtomicU16>) -> Self {
         let mut sys = System::new();
         sys.refresh_cpu_usage();
         // A baseline, so the first tick has CPU and I/O rates. The list itself is not used.
@@ -154,7 +164,8 @@ impl Sampler {
             #[cfg(target_os = "linux")]
             networks,
             last: Instant::now(),
-            last_slow: None,
+            clocks: Clocks::default(),
+            drawn,
             procs,
             storage: StorageCollector::new(),
             zfs: ZfsCollector::new(),
@@ -163,11 +174,12 @@ impl Sampler {
     }
 
     fn sample(&mut self) -> Snapshot {
-        let now = Instant::now();
-        let slow = is_slow(self.last_slow, now);
-        if slow {
-            self.last_slow = Some(now);
-        }
+        // A stale value costs at most one extra or one skipped refresh.
+        let drawn = PanelSet::from_bits(self.drawn.load(Ordering::Relaxed));
+        let work = self
+            .clocks
+            .plan(Instant::now(), drawn, self.sensors.has_temps());
+        let slow = work.slow;
 
         self.sys.refresh_cpu_usage();
         self.sys.refresh_memory();
@@ -184,9 +196,9 @@ impl Sampler {
         let interfaces = self.networks.collect(secs);
         let (rx_rate, tx_rate) = net::totals(&interfaces);
         let processes = self.procs.collect(&mut self.sys, secs, slow);
-        let storage = self.storage.collect(secs, slow);
+        let storage = self.storage.collect(secs, slow, work.space);
         let zfs = self.zfs.collect(slow);
-        let sensors = self.sensors.collect(slow);
+        let sensors = self.sensors.collect(work.temps, slow);
 
         let mem_used = self.sys.used_memory();
         #[cfg(target_os = "linux")]
@@ -282,9 +294,68 @@ fn wait_until_due(
     }
 }
 
-/// Pure. True on the first tick, then once each `SLOW_PERIOD`.
-fn is_slow(last_slow: Option<Instant>, now: Instant) -> bool {
-    last_slow.is_none_or(|last| now.saturating_duration_since(last) >= SLOW_PERIOD)
+/// Pure. True on the first tick (`last` is `None`), then once each `period`.
+fn due(last: Option<Instant>, now: Instant, period: Duration) -> bool {
+    last.is_none_or(|last| now.saturating_duration_since(last) >= period)
+}
+
+/// When each kind of periodic work last ran. `None` means never, so the first tick runs it.
+#[derive(Clone, Copy, Debug, Default)]
+struct Clocks {
+    slow: Option<Instant>,
+    sensors_scan: Option<Instant>,
+    /// Any temperature read: the hottest sensors or a full scan.
+    sensors_read: Option<Instant>,
+    space: Option<Instant>,
+}
+
+/// The periodic work of one tick.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Work {
+    /// The 5 s work: the disk list, the battery, the user list, command lines.
+    slow: bool,
+    temps: TempWork,
+    /// The space of all disks.
+    space: bool,
+}
+
+impl Clocks {
+    /// Pure. The work of a tick at `now`, and the clocks of that work move to `now`.
+    /// `drawn` is the set of panels the UI drew last. `has_temps` is false when the last
+    /// sensor reading had no temperatures.
+    fn plan(&mut self, now: Instant, drawn: PanelSet, has_temps: bool) -> Work {
+        let sensors = drawn.contains(PanelId::Sensors);
+        // The first scan finds out if the host has sensors at all. An empty reading hides
+        // the panel, so it is never drawn: scan it again whatever is drawn.
+        let scan = due(self.sensors_scan, now, SCAN_PERIOD)
+            && (self.sensors_scan.is_none() || sensors || !has_temps);
+        let temps = if scan {
+            TempWork::Scan
+        } else if sensors && due(self.sensors_read, now, SLOW_PERIOD) {
+            TempWork::Hottest
+        } else {
+            TempWork::Keep
+        };
+        let space = due(self.space, now, SCAN_PERIOD)
+            && (self.space.is_none() || drawn.contains(PanelId::Storage));
+        let work = Work {
+            slow: due(self.slow, now, SLOW_PERIOD),
+            temps,
+            space,
+        };
+        let moves = [
+            (work.slow, &mut self.slow),
+            (scan, &mut self.sensors_scan),
+            (temps != TempWork::Keep, &mut self.sensors_read),
+            (space, &mut self.space),
+        ];
+        for (ran, clock) in moves {
+            if ran {
+                *clock = Some(now);
+            }
+        }
+        work
+    }
 }
 
 /// Pure. Linux used memory with the shrinkable ARC counted as free (design §7.6, option A).
@@ -302,50 +373,220 @@ mod tests {
     use std::sync::mpsc;
 
     #[test]
-    fn first_tick_is_slow_then_once_each_period() {
+    fn due_on_the_first_tick_then_once_each_period() {
         let base = Instant::now();
-        assert!(is_slow(None, base));
-        assert!(!is_slow(Some(base), base + Duration::from_secs(4)));
-        assert!(is_slow(Some(base), base + SLOW_PERIOD));
+        assert!(due(None, base, SLOW_PERIOD));
+        assert!(!due(Some(base), base + Duration::from_secs(4), SLOW_PERIOD));
+        assert!(due(Some(base), base + SLOW_PERIOD, SLOW_PERIOD));
+        assert!(!due(Some(base), base + SLOW_PERIOD, SCAN_PERIOD));
+        assert!(due(Some(base), base + SCAN_PERIOD, SCAN_PERIOD));
         assert!(
-            !is_slow(Some(base + Duration::from_secs(1)), base),
-            "a clock step back is not slow"
+            !due(Some(base + Duration::from_secs(1)), base, SLOW_PERIOD),
+            "a clock step back is not due"
         );
     }
 
-    /// The cost of one sampler tick on this host, for performance work. Run it with
+    fn secs(n: u64) -> Duration {
+        Duration::from_secs(n)
+    }
+
+    fn without(id: PanelId) -> PanelSet {
+        let mut set = PanelSet::ALL;
+        set.remove(id);
+        set
+    }
+
+    #[test]
+    fn the_first_tick_does_everything_whatever_is_drawn() {
+        let mut clocks = Clocks::default();
+        let work = clocks.plan(Instant::now(), PanelSet::NONE, false);
+        assert_eq!(
+            work,
+            Work {
+                slow: true,
+                temps: TempWork::Scan,
+                space: true
+            }
+        );
+    }
+
+    #[test]
+    fn drawn_sensors_read_the_hottest_each_5_s_and_scan_each_30_s() {
+        let t0 = Instant::now();
+        let mut clocks = Clocks::default();
+        clocks.plan(t0, PanelSet::ALL, true);
+        let temps = |clocks: &mut Clocks, at| clocks.plan(t0 + secs(at), PanelSet::ALL, true).temps;
+        assert_eq!(temps(&mut clocks, 1), TempWork::Keep);
+        assert_eq!(temps(&mut clocks, 5), TempWork::Hottest);
+        assert_eq!(temps(&mut clocks, 6), TempWork::Keep);
+        assert_eq!(temps(&mut clocks, 10), TempWork::Hottest);
+        assert_eq!(temps(&mut clocks, 30), TempWork::Scan);
+        assert_eq!(temps(&mut clocks, 31), TempWork::Keep);
+        assert_eq!(
+            temps(&mut clocks, 35),
+            TempWork::Hottest,
+            "5 s after the scan"
+        );
+    }
+
+    #[test]
+    fn hidden_sensors_are_not_read() {
+        let t0 = Instant::now();
+        let mut clocks = Clocks::default();
+        clocks.plan(t0, PanelSet::ALL, true);
+        for at in [5, 10, 30, 60, 95] {
+            let work = clocks.plan(t0 + secs(at), without(PanelId::Sensors), true);
+            assert_eq!(work.temps, TempWork::Keep, "at {at} s");
+        }
+    }
+
+    #[test]
+    fn an_empty_reading_is_scanned_again_each_30_s_whatever_is_drawn() {
+        // An empty reading hides the panel, so it is never drawn. Without this rule it
+        // would never be read again.
+        let t0 = Instant::now();
+        let mut clocks = Clocks::default();
+        clocks.plan(t0, PanelSet::ALL, false);
+        let hidden = without(PanelId::Sensors);
+        assert_eq!(
+            clocks.plan(t0 + secs(5), hidden, false).temps,
+            TempWork::Keep
+        );
+        assert_eq!(
+            clocks.plan(t0 + secs(30), hidden, false).temps,
+            TempWork::Scan
+        );
+        assert_eq!(
+            clocks.plan(t0 + secs(35), hidden, false).temps,
+            TempWork::Keep
+        );
+        assert_eq!(
+            clocks.plan(t0 + secs(60), hidden, false).temps,
+            TempWork::Scan
+        );
+    }
+
+    #[test]
+    fn sensors_drawn_again_with_an_old_reading_refresh_on_the_next_tick() {
+        let t0 = Instant::now();
+        let mut clocks = Clocks::default();
+        clocks.plan(t0, PanelSet::ALL, true);
+        let hidden = without(PanelId::Sensors);
+        for at in [5, 10, 15] {
+            clocks.plan(t0 + secs(at), hidden, true);
+        }
+        let work = clocks.plan(t0 + secs(16), PanelSet::ALL, true);
+        assert_eq!(work.temps, TempWork::Hottest);
+        assert!(!work.slow, "not on the 5 s grid, but read at once");
+
+        // Hidden for longer than 30 s: the next tick is the full scan.
+        clocks.plan(t0 + secs(17), hidden, true);
+        let work = clocks.plan(t0 + secs(50), PanelSet::ALL, true);
+        assert_eq!(work.temps, TempWork::Scan);
+    }
+
+    #[test]
+    fn disk_space_is_read_each_30_s_while_storage_is_drawn() {
+        let t0 = Instant::now();
+        let mut clocks = Clocks::default();
+        clocks.plan(t0, PanelSet::ALL, true);
+        let space = |clocks: &mut Clocks, at, drawn| clocks.plan(t0 + secs(at), drawn, true).space;
+        assert!(!space(&mut clocks, 5, PanelSet::ALL));
+        assert!(space(&mut clocks, 30, PanelSet::ALL));
+        assert!(!space(&mut clocks, 35, PanelSet::ALL));
+        assert!(!space(&mut clocks, 60, without(PanelId::Storage)));
+        assert!(
+            space(&mut clocks, 61, PanelSet::ALL),
+            "drawn again: read at once"
+        );
+    }
+
+    #[test]
+    fn the_slow_work_keeps_its_5_s_period() {
+        let t0 = Instant::now();
+        let mut clocks = Clocks::default();
+        clocks.plan(t0, PanelSet::NONE, true);
+        let slow = |clocks: &mut Clocks, at| clocks.plan(t0 + secs(at), PanelSet::NONE, true).slow;
+        assert!(!slow(&mut clocks, 4));
+        assert!(slow(&mut clocks, 5));
+        assert!(!slow(&mut clocks, 9));
+        assert!(slow(&mut clocks, 10));
+    }
+
+    /// The cost of each kind of sampler tick on this host, for performance work. Run it with
     /// `cargo test --release sample_cost -- --ignored --nocapture`.
     #[test]
     #[ignore = "reads the real machine and prints timings"]
     fn sample_cost() {
-        const FAST: usize = 15;
-        const SLOW: usize = 5;
-        let mut sampler = Sampler::new();
+        const ROUNDS: usize = 5;
+        const FAST_PER_ROUND: usize = 3;
+        let drawn = Arc::new(AtomicU16::new(PanelSet::ALL.bits()));
+        let mut sampler = Sampler::new(Arc::clone(&drawn));
         thread::sleep(MINIMUM_CPU_UPDATE_INTERVAL);
         // The first tick also discovers everything, so it is not counted.
         let first = sampler.sample();
-        let mut fast = Vec::with_capacity(FAST);
-        let mut slow = Vec::with_capacity(SLOW);
-        for i in 0..FAST + SLOW {
-            thread::sleep(Duration::from_millis(100));
-            let is_slow = i % 4 == 0 && slow.len() < SLOW;
-            sampler.last_slow = if is_slow { None } else { Some(Instant::now()) };
-            let started = Instant::now();
-            sampler.sample();
-            let took = started.elapsed().as_secs_f64() * 1_000.0;
-            if is_slow { &mut slow } else { &mut fast }.push(took);
+
+        let ago = |n: u64| {
+            Some(
+                Instant::now()
+                    .checked_sub(secs(n))
+                    .expect("uptime over 31 s"),
+            )
+        };
+        // The clocks and the drawn panels for each kind of tick.
+        let fast = |_: &mut Clocks| PanelSet::ALL;
+        let five = |c: &mut Clocks| {
+            (c.slow, c.sensors_read) = (ago(6), ago(6));
+            PanelSet::ALL
+        };
+        let five_hidden = |c: &mut Clocks| {
+            (c.slow, c.sensors_read) = (ago(6), ago(6));
+            without(PanelId::Sensors)
+        };
+        let thirty = |c: &mut Clocks| {
+            *c = Clocks {
+                slow: ago(31),
+                sensors_scan: ago(31),
+                sensors_read: ago(31),
+                space: ago(31),
+            };
+            PanelSet::ALL
+        };
+        type Setup<'a> = &'a dyn Fn(&mut Clocks) -> PanelSet;
+        let kinds: [(&str, Setup); 4] = [
+            ("fast tick", &fast),
+            ("5 s tick", &five),
+            ("5 s tick, sensors hidden", &five_hidden),
+            ("30 s tick", &thirty),
+        ];
+        let mut times = vec![Vec::new(); kinds.len()];
+        for _ in 0..ROUNDS {
+            let order = std::iter::repeat_n(0, FAST_PER_ROUND).chain(1..kinds.len());
+            for kind in order {
+                thread::sleep(Duration::from_millis(100));
+                let now = Some(Instant::now());
+                sampler.clocks = Clocks {
+                    slow: now,
+                    sensors_scan: now,
+                    sensors_read: now,
+                    space: now,
+                };
+                let panels = kinds[kind].1(&mut sampler.clocks);
+                drawn.store(panels.bits(), Ordering::Relaxed);
+                let started = Instant::now();
+                sampler.sample();
+                times[kind].push(started.elapsed().as_secs_f64() * 1_000.0);
+            }
         }
         let stats = |v: &[f64]| {
             let mean = v.iter().sum::<f64>() / v.len().max(1) as f64;
             let max = v.iter().copied().fold(0.0, f64::max);
             format!("mean {mean:.2} ms, max {max:.2} ms over {}", v.len())
         };
-        println!(
-            "sample_cost: {} processes; fast tick {}; slow tick {}",
-            first.processes.len(),
-            stats(&fast),
-            stats(&slow)
-        );
+        println!("sample_cost: {} processes", first.processes.len());
+        for ((name, _), v) in kinds.iter().zip(&times) {
+            println!("  {name}: {}", stats(v));
+        }
     }
 
     /// A sampler that reads nothing. It counts its kills and baseline samples.

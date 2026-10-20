@@ -84,6 +84,16 @@ impl PanelSet {
     pub fn iter(self) -> impl Iterator<Item = PanelId> {
         PanelId::ALL.into_iter().filter(move |&p| self.contains(p))
     }
+
+    /// The bit mask, one bit for each `PanelId`, to share the set through an atomic.
+    pub fn bits(self) -> u16 {
+        self.0
+    }
+
+    /// The set from `bits`. Bits that are not a panel are dropped.
+    pub fn from_bits(bits: u16) -> Self {
+        PanelSet(bits & Self::ALL.0)
+    }
 }
 
 impl Default for PanelSet {
@@ -129,5 +139,18 @@ mod tests {
             two.iter().collect::<Vec<_>>(),
             [PanelId::Cpu, PanelId::Memory]
         );
+    }
+
+    #[test]
+    fn bits_round_trip_and_drop_unknown_bits() {
+        let two: PanelSet = [PanelId::Storage, PanelId::Sensors].into_iter().collect();
+        assert_eq!(PanelSet::from_bits(two.bits()), two);
+        assert_eq!(PanelSet::from_bits(PanelSet::ALL.bits()), PanelSet::ALL);
+        assert_eq!(
+            PanelSet::from_bits(u16::MAX),
+            PanelSet::ALL,
+            "no ninth panel"
+        );
+        assert_eq!(PanelSet::from_bits(0), PanelSet::NONE);
     }
 }

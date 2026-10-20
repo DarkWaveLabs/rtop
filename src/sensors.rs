@@ -47,6 +47,20 @@ impl Sensors {
     }
 }
 
+/// How many of the hottest sensors a short refresh reads. The panel shows 6.
+const HOT_SENSORS: usize = 12;
+
+/// Which temperatures one tick reads. The sampler decides this from the cadence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TempWork {
+    /// Read nothing; the last values stay.
+    Keep,
+    /// Read again only the `HOT_SENSORS` hottest sensors of the last reading.
+    Hottest,
+    /// List the sensors again and read them all.
+    Scan,
+}
+
 /// Owned by the sampler.
 pub struct SensorCollector {
     components: Components,
@@ -54,17 +68,41 @@ pub struct SensorCollector {
 }
 
 impl SensorCollector {
+    /// Lists nothing yet: the first `TempWork::Scan` does that.
     pub fn new() -> Self {
         Self {
-            components: Components::new_with_refreshed_list(),
+            components: Components::new(),
             last: Sensors::default(),
         }
     }
 
-    /// Refreshes only when `slow` is true. Otherwise returns a clone of the last value.
-    pub fn collect(&mut self, slow: bool) -> Sensors {
-        if slow {
-            self.components.refresh(true);
+    /// True when the last reading has at least one temperature.
+    pub fn has_temps(&self) -> bool {
+        !self.last.temps.is_empty()
+    }
+
+    /// Reads the temperatures that `temps` asks for, and the battery when `battery` is
+    /// true. Whatever it does not read keeps its last value.
+    pub fn collect(&mut self, temps: TempWork, battery: bool) -> Sensors {
+        match temps {
+            TempWork::Keep => {}
+            TempWork::Hottest => {
+                let readings: Vec<Option<f32>> = self
+                    .components
+                    .list()
+                    .iter()
+                    .map(|c| c.temperature())
+                    .collect();
+                let list = self.components.list_mut();
+                for i in hottest(&readings, HOT_SENSORS) {
+                    if let Some(component) = list.get_mut(i) {
+                        component.refresh();
+                    }
+                }
+            }
+            TempWork::Scan => self.components.refresh(true),
+        }
+        if temps != TempWork::Keep {
             let raw = self
                 .components
                 .list()
@@ -77,13 +115,25 @@ impl SensorCollector {
                     })
                 })
                 .collect();
-            self.last = Sensors {
-                temps: tidy_temps(raw),
-                battery: platform::read_battery(),
-            };
+            self.last.temps = tidy_temps(raw);
+        }
+        if battery {
+            self.last.battery = platform::read_battery();
         }
         self.last.clone()
     }
+}
+
+/// Pure. The indices of the `n` hottest readings, hottest first, ties by index. A reading
+/// that is missing or not finite is left out. By index, not by label: labels can repeat.
+pub fn hottest(readings: &[Option<f32>], n: usize) -> Vec<usize> {
+    let mut hot: Vec<(usize, f32)> = readings
+        .iter()
+        .enumerate()
+        .filter_map(|(i, c)| c.filter(|c| c.is_finite()).map(|c| (i, c)))
+        .collect();
+    crate::order::sort_by(&mut hot, |a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+    hot.into_iter().take(n).map(|(i, _)| i).collect()
 }
 
 /// Pure. Drops NaN and non-finite values, rounds to 0.1 °C, sorts hottest first, ties by label.
@@ -608,10 +658,33 @@ mod tests {
     }
 
     #[test]
-    fn collector_returns_the_last_value_on_fast_ticks() {
+    fn collector_returns_the_last_value_when_it_reads_nothing() {
         let mut collector = SensorCollector::new();
-        let first = collector.collect(true);
-        assert_eq!(collector.collect(false), first);
+        let first = collector.collect(TempWork::Scan, true);
+        assert_eq!(collector.collect(TempWork::Keep, false), first);
+        assert_eq!(collector.has_temps(), !first.temps.is_empty());
         assert!(first.temps.iter().all(|t| t.celsius.is_finite()));
+    }
+
+    #[test]
+    fn hottest_picks_by_index_so_repeated_labels_stay_apart() {
+        // Labels can repeat (several "PMU tdie" on Apple silicon), so the choice is by index.
+        let readings = [
+            Some(40.0),
+            Some(71.0),
+            None,
+            Some(f32::NAN),
+            Some(71.0),
+            Some(55.5),
+            Some(90.0),
+        ];
+        assert_eq!(hottest(&readings, 3), [6, 1, 4], "ties by index");
+        assert_eq!(
+            hottest(&readings, 12),
+            [6, 1, 4, 5, 0],
+            "no reading, no refresh"
+        );
+        assert!(hottest(&readings, 0).is_empty());
+        assert!(hottest(&[], 12).is_empty());
     }
 }

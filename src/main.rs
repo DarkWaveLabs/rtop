@@ -27,7 +27,7 @@ mod zfs;
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
@@ -111,10 +111,13 @@ fn main() -> Result<()> {
     };
 
     let interval_ms = Arc::new(AtomicU64::new(DEFAULT_INTERVAL_MS));
+    // Every panel until the first frame, so the first ticks discover everything.
+    let drawn = Arc::new(AtomicU16::new(panel::PanelSet::ALL.bits()));
     let (tx, rx) = mpsc::channel();
     let (control_tx, control_rx) = mpsc::channel();
     let mut app = App::new(metrics::HostInfo::detect(), Arc::clone(&interval_ms))
-        .with_control_sender(control_tx);
+        .with_control_sender(control_tx)
+        .with_drawn_panels(Arc::clone(&drawn));
     // Precedence: the command line, then the config file, then the built-in default.
     app.apply_config(&config);
     if let Some(ms) = cli.interval_ms {
@@ -123,7 +126,8 @@ fn main() -> Result<()> {
     if cli.tree {
         app.tree = true;
     }
-    metrics::spawn_sampler(tx.clone(), interval_ms, control_rx).context("start sampler thread")?;
+    metrics::spawn_sampler(tx.clone(), interval_ms, drawn, control_rx)
+        .context("start sampler thread")?;
 
     // `ratatui::run` enters raw mode and the alternate screen, and it puts the
     // terminal back afterwards, even when the closure panics.

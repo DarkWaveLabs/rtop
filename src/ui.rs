@@ -88,6 +88,7 @@ fn draw_body(frame: &mut Frame, body: Rect, app: &mut App) -> usize {
     };
 
     let plan = layout::plan(body, &requests(app, snapshot));
+    app.publish_drawn(plan.areas.iter().map(|&(id, _)| id).collect());
     for &(id, area) in &plan.areas {
         match id {
             PanelId::Cpu => draw_cores(frame, area, snapshot),
@@ -511,12 +512,14 @@ mod tests {
     use crate::app::Event;
     use crate::metrics::{HostInfo, ProcInfo};
     use crate::net::NetIface;
+    use crate::panel::PanelSet;
     use crate::process::KillTarget;
     use crate::sensors::{Battery, BatteryState, Sensors, Temp};
     use crate::storage::{Storage, Volume};
     use crate::zfs::ZfsArc;
     use ratatui::crossterm::event::{KeyCode, KeyEvent};
-    use std::sync::{Arc, atomic::AtomicU64};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 
     #[test]
     fn many_cores_spread_over_more_columns() {
@@ -769,6 +772,47 @@ mod tests {
                 "core at {pct}% missing:\n{screen}"
             );
         }
+    }
+
+    #[test]
+    fn the_drawn_set_leaves_out_collapsed_and_hidden_panels() {
+        let drawn = Arc::new(AtomicU16::new(PanelSet::ALL.bits()));
+        let mut app = example_app(8, true).with_drawn_panels(Arc::clone(&drawn));
+        press(&mut app, KeyCode::Char('3'));
+        render(&mut app, 80, 24);
+        let set = PanelSet::from_bits(drawn.load(Ordering::Relaxed));
+        let expected: PanelSet = [
+            PanelId::Cpu,
+            PanelId::Network,
+            PanelId::Storage,
+            PanelId::Zfs,
+            PanelId::Processes,
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            set.iter().collect::<Vec<_>>(),
+            expected.iter().collect::<Vec<_>>(),
+            "history collapsed, memory hidden by the user"
+        );
+
+        render(&mut app, 110, 40);
+        let set = PanelSet::from_bits(drawn.load(Ordering::Relaxed));
+        assert!(set.contains(PanelId::Sensors), "room again: drawn again");
+    }
+
+    #[test]
+    fn the_drawn_set_stays_whole_until_the_first_snapshot() {
+        let drawn = Arc::new(AtomicU16::new(PanelSet::ALL.bits()));
+        let host = HostInfo::default();
+        let mut app =
+            App::new(host, Arc::new(AtomicU64::new(1_000))).with_drawn_panels(Arc::clone(&drawn));
+        render(&mut app, 80, 24);
+        assert_eq!(
+            PanelSet::from_bits(drawn.load(Ordering::Relaxed)),
+            PanelSet::ALL,
+            "the first ticks discover everything"
+        );
     }
 
     #[test]

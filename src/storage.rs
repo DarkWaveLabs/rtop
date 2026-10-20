@@ -4,11 +4,12 @@ use std::collections::{HashMap, HashSet};
 
 use sysinfo::{DiskRefreshKind, DiskUsage, Disks};
 
-/// Linux: each `Disk::refresh_specifics` re-reads and parses all of /proc/diskstats, and
-/// every mount of one device reads the same counter. So a tick refreshes one disk for each
-/// device name and gives its usage to the other mounts of that device. Elsewhere a name is
-/// not a counter key (macOS names are volume labels), so each disk refreshes itself.
-const ONE_REFRESH_PER_DEVICE: bool = cfg!(target_os = "linux");
+/// Every disk of one I/O group reads the same counter: on Linux each mount of one device,
+/// on macOS each APFS volume of one whole disk. Linux re-reads and parses all of
+/// /proc/diskstats for each `Disk::refresh_specifics`, and macOS walks the IOKit registry.
+/// So a tick refreshes one disk for each group and gives its usage to the other disks of
+/// the group. Elsewhere each disk refreshes itself.
+const ONE_REFRESH_PER_GROUP: bool = cfg!(any(target_os = "linux", target_os = "macos"));
 
 /// File systems with no real storage behind them.
 const PSEUDO_FILE_SYSTEMS: [&str; 6] = [
@@ -51,33 +52,58 @@ pub struct StorageCollector {
     disks: Disks,
     /// (device, mount) of each volume in the last call. A key that is not here is a first sample.
     seen: HashSet<(String, String)>,
-    /// mount → io_group. Filled on slow calls on macOS only; empty elsewhere.
+    /// (device, mount) of each disk in the last list. A disk that is not here is new, and
+    /// has no space values until it is read.
+    listed: HashSet<(String, String)>,
+    /// mount → io_group. Filled on re-lists on macOS only; empty elsewhere.
     groups: HashMap<String, String>,
     /// Mount points that are regular files, such as the /etc/hosts that Docker bind-mounts.
-    /// Filled on slow calls.
+    /// Filled on re-lists.
     file_mounts: HashSet<String>,
 }
 
 impl StorageCollector {
+    /// Lists nothing yet: the first call does that.
     pub fn new() -> Self {
         Self {
-            disks: Disks::new_with_refreshed_list_specifics(
-                DiskRefreshKind::nothing().with_storage().with_io_usage(),
-            ),
+            disks: Disks::new(),
             seen: HashSet::new(),
+            listed: HashSet::new(),
             groups: HashMap::new(),
             file_mounts: HashSet::new(),
         }
     }
 
-    /// I/O counters of kept disks refresh on every call. Space and the disk list refresh only when `slow` is true.
-    pub fn collect(&mut self, secs: f64, slow: bool) -> Storage {
-        if slow {
+    /// The I/O counters refresh on every call. With `slow`, the disk list refreshes too,
+    /// and only disks that are new since the last list read their space. With `space`, the
+    /// list refreshes and every disk reads its space.
+    pub fn collect(&mut self, secs: f64, slow: bool, space: bool) -> Storage {
+        let relist = slow || space;
+        if relist {
             // A re-list also reads the I/O counters, so the fast loop below is not needed.
-            self.disks.refresh_specifics(
-                true,
-                DiskRefreshKind::nothing().with_storage().with_io_usage(),
-            );
+            let kind = DiskRefreshKind::nothing().with_io_usage();
+            let kind = if space { kind.with_storage() } else { kind };
+            self.disks.refresh_specifics(true, kind);
+            let keys: Vec<(String, String)> = self
+                .disks
+                .list()
+                .iter()
+                .map(|disk| {
+                    (
+                        disk.name().to_string_lossy().into_owned(),
+                        disk.mount_point().to_string_lossy().into_owned(),
+                    )
+                })
+                .collect();
+            if !space {
+                // A new disk has total 0 until its space is read, and `keep_volume` would drop it.
+                for i in new_disks(&self.listed, &keys) {
+                    if let Some(disk) = self.disks.list_mut().get_mut(i) {
+                        disk.refresh_specifics(DiskRefreshKind::nothing().with_storage());
+                    }
+                }
+            }
+            self.listed = keys.into_iter().collect();
             #[cfg(target_os = "macos")]
             self.refresh_groups();
             self.file_mounts = self
@@ -89,67 +115,62 @@ impl StorageCollector {
                 .map(|mount| mount.to_string_lossy().into_owned())
                 .collect();
         }
-        let io_disks = {
-            let texts: Vec<_> = self
-                .disks
-                .list()
-                .iter()
-                .map(|disk| {
-                    (
-                        disk.name().to_string_lossy(),
-                        disk.file_system().to_string_lossy(),
-                        disk.mount_point().to_string_lossy(),
-                        disk.total_space(),
-                    )
-                })
-                .collect();
-            let items: Vec<(&str, &str, &str, u64)> = texts
-                .iter()
-                .map(|(name, fs, mount, total)| {
-                    (name.as_ref(), fs.as_ref(), mount.as_ref(), *total)
-                })
-                .collect();
-            io_refresh_set(&items, ONE_REFRESH_PER_DEVICE)
-        };
-        if !slow {
+        let mut raws: Vec<RawVolume> = self
+            .disks
+            .list()
+            .iter()
+            .map(|disk| {
+                let mount = disk.mount_point().to_string_lossy().into_owned();
+                let device = disk.name().to_string_lossy().into_owned();
+                RawVolume {
+                    io_group: self
+                        .groups
+                        .get(&mount)
+                        .cloned()
+                        .unwrap_or_else(|| device.clone()),
+                    mount,
+                    device,
+                    file_system: disk.file_system().to_string_lossy().into_owned(),
+                    total: disk.total_space(),
+                    available: disk.available_space(),
+                    usage: DiskUsage::default(),
+                }
+            })
+            .collect();
+        let items: Vec<(&str, &str, &str, u64)> = raws
+            .iter()
+            .map(|r| {
+                (
+                    r.io_group.as_str(),
+                    r.file_system.as_str(),
+                    r.mount.as_str(),
+                    r.total,
+                )
+            })
+            .collect();
+        let io_disks = io_refresh_set(&items, ONE_REFRESH_PER_GROUP);
+        if !relist {
             for &i in &io_disks {
                 if let Some(disk) = self.disks.list_mut().get_mut(i) {
                     disk.refresh_specifics(DiskRefreshKind::nothing().with_io_usage());
                 }
             }
         }
-        // Device name → the usage of the one disk refreshed for it. Also on slow ticks: the
-        // other mounts' own deltas there span the time since the last re-list, not `secs`.
-        let shared: HashMap<String, DiskUsage> = if ONE_REFRESH_PER_DEVICE {
-            io_disks
-                .iter()
-                .filter_map(|&i| self.disks.list().get(i))
-                .map(|disk| (disk.name().to_string_lossy().into_owned(), disk.usage()))
-                .collect()
+        let own: Vec<DiskUsage> = self.disks.list().iter().map(|disk| disk.usage()).collect();
+        // Also on re-list ticks: the other disks' own deltas there span the time since the
+        // last re-list, not `secs`.
+        let usages = if ONE_REFRESH_PER_GROUP {
+            let groups: Vec<&str> = raws.iter().map(|r| r.io_group.as_str()).collect();
+            shared_usage(&groups, &own, &io_disks)
         } else {
-            HashMap::new()
+            own
         };
-
-        let raws: Vec<RawVolume> = self
-            .disks
-            .list()
-            .iter()
-            .map(|disk| RawVolume {
-                mount: disk.mount_point().to_string_lossy().into_owned(),
-                device: disk.name().to_string_lossy().into_owned(),
-                file_system: disk.file_system().to_string_lossy().into_owned(),
-                total: disk.total_space(),
-                available: disk.available_space(),
-                usage: shared
-                    .get(disk.name().to_string_lossy().as_ref())
-                    .copied()
-                    .unwrap_or_else(|| disk.usage()),
-            })
-            .filter(|r| {
-                keep_volume(&r.mount, &r.file_system, r.total)
-                    && !self.file_mounts.contains(&r.mount)
-            })
-            .collect();
+        for (raw, usage) in raws.iter_mut().zip(usages) {
+            raw.usage = usage;
+        }
+        raws.retain(|r| {
+            keep_volume(&r.mount, &r.file_system, r.total) && !self.file_mounts.contains(&r.mount)
+        });
         let items: Vec<(&str, &str, &str)> = raws
             .iter()
             .map(|r| (r.device.as_str(), r.file_system.as_str(), r.mount.as_str()))
@@ -187,11 +208,7 @@ impl StorageCollector {
                     file_system: r.file_system.clone(),
                     total: r.total,
                     available: r.available,
-                    io_group: self
-                        .groups
-                        .get(&r.mount)
-                        .cloned()
-                        .unwrap_or_else(|| r.device.clone()),
+                    io_group: r.io_group.clone(),
                     io_known: known,
                     read_rate,
                     write_rate,
@@ -235,6 +252,8 @@ impl StorageCollector {
 struct RawVolume {
     mount: String,
     device: String,
+    /// See `Volume::io_group`.
+    io_group: String,
     file_system: String,
     total: u64,
     available: u64,
@@ -287,18 +306,44 @@ pub fn keep_volume(mount: &str, file_system: &str, total: u64) -> bool {
 }
 
 /// Pure. Indices of the disks whose I/O counters a fast tick refreshes: kept by
-/// `keep_volume` and not ZFS. With `one_per_device`, only the first such disk of each
-/// device name. Items are (device, file_system, mount, total).
-fn io_refresh_set(items: &[(&str, &str, &str, u64)], one_per_device: bool) -> Vec<usize> {
-    let mut devices = HashSet::new();
+/// `keep_volume` and not ZFS. With `one_per_group`, only the first such disk of each
+/// I/O group. Items are (io_group, file_system, mount, total).
+fn io_refresh_set(items: &[(&str, &str, &str, u64)], one_per_group: bool) -> Vec<usize> {
+    let mut groups = HashSet::new();
     items
         .iter()
         .enumerate()
-        .filter(|(_, (device, fs, mount, total))| {
+        .filter(|(_, (group, fs, mount, total))| {
             *fs != "zfs"
                 && keep_volume(mount, fs, *total)
-                && (!one_per_device || devices.insert(*device))
+                && (!one_per_group || groups.insert(*group))
         })
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// Pure. The usage that each disk reports: the usage of the disk in `refreshed` that has
+/// the same group, or its own when no disk of its group is there. `groups` and `own` have
+/// one entry for each disk.
+fn shared_usage(groups: &[&str], own: &[DiskUsage], refreshed: &[usize]) -> Vec<DiskUsage> {
+    let mut by_group: HashMap<&str, DiskUsage> = HashMap::new();
+    for &i in refreshed {
+        if let (Some(&group), Some(&usage)) = (groups.get(i), own.get(i)) {
+            by_group.entry(group).or_insert(usage);
+        }
+    }
+    groups
+        .iter()
+        .zip(own)
+        .map(|(group, usage)| by_group.get(group).copied().unwrap_or(*usage))
+        .collect()
+}
+
+/// Pure. Indices in `now` of the (device, mount) keys that are not in `listed`.
+fn new_disks(listed: &HashSet<(String, String)>, now: &[(String, String)]) -> Vec<usize> {
+    now.iter()
+        .enumerate()
+        .filter(|(_, key)| !listed.contains(*key))
         .map(|(i, _)| i)
         .collect()
 }
@@ -640,14 +685,79 @@ mod tests {
     }
 
     #[test]
+    fn new_disks_are_the_keys_not_listed_before() {
+        let listed = HashSet::from([key("disk3", "/"), key("disk3", "/System/Volumes/Data")]);
+        let now = [
+            key("disk3", "/"),
+            key("USB", "/Volumes/USB"),
+            key("disk3", "/System/Volumes/Data"),
+            key("Other", "/"),
+        ];
+        assert_eq!(
+            new_disks(&listed, &now),
+            [1, 3],
+            "a new device on a known mount too"
+        );
+        assert_eq!(new_disks(&HashSet::new(), &now), [0, 1, 2, 3], "first list");
+        assert!(new_disks(&listed, &[]).is_empty());
+    }
+
+    fn usage(read: u64, written: u64) -> DiskUsage {
+        DiskUsage {
+            read_bytes: read,
+            written_bytes: written,
+            total_read_bytes: 1_000_000,
+            total_written_bytes: 1_000_000,
+        }
+    }
+
+    #[test]
+    fn a_group_shares_its_refreshed_usage_on_a_relist_tick() {
+        // On a re-list tick every disk read its counter, but only disk 0 was also read on
+        // the fast ticks before. Disk 1's own delta spans 5 s, so it takes disk 0's.
+        let groups = ["disk3", "disk3", "disk4", "tank"];
+        let own = [usage(100, 10), usage(500, 50), usage(7, 1), usage(9, 9)];
+        let leaders = [0, 2];
+        assert_eq!(
+            shared_usage(&groups, &own, &leaders),
+            [usage(100, 10), usage(100, 10), usage(7, 1), usage(9, 9)],
+            "a group without a refreshed disk keeps its own usage"
+        );
+        assert!(shared_usage(&[], &[], &[]).is_empty());
+    }
+
+    #[test]
+    fn io_refresh_set_takes_one_disk_per_apfs_container() {
+        let items = [
+            ("disk3", "apfs", "/", 100),
+            ("disk3", "apfs", "/System/Volumes/Data", 100),
+            ("disk3", "apfs", "/System/Volumes/VM", 100),
+            ("disk5", "apfs", "/Volumes/USB", 100),
+        ];
+        assert_eq!(io_refresh_set(&items, true), [0, 3]);
+    }
+
+    #[test]
     fn collector_reads_this_host_without_panic() {
         let mut collector = StorageCollector::new();
-        let first = collector.collect(1.0, true);
-        let second = collector.collect(0.25, false);
-        for storage in [&first, &second] {
+        let first = collector.collect(1.0, true, true);
+        let second = collector.collect(0.25, false, false);
+        let relist = collector.collect(0.25, true, false);
+        for storage in [&first, &second, &relist] {
             assert!(storage.volumes.windows(2).all(|w| w[1].mount != "/"));
             assert!(storage.volumes.iter().all(|v| v.total > 0));
         }
+        let mounts = |s: &Storage| {
+            s.volumes
+                .iter()
+                .map(|v| v.mount.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            mounts(&relist),
+            mounts(&first),
+            "a re-list without space keeps the space of known disks"
+        );
         assert!(
             first
                 .volumes

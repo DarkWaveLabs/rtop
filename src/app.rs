@@ -3,7 +3,7 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -107,6 +107,8 @@ pub struct App {
     /// To the sampler thread: kills, wake-ups and pause.
     control_tx: Option<Sender<Control>>,
     interval_ms: Arc<AtomicU64>,
+    /// The panels the last frame drew, as `PanelSet` bits, for the sampler.
+    drawn: Arc<AtomicU16>,
 }
 
 impl App {
@@ -135,6 +137,7 @@ impl App {
             kill_prompt_drawn: false,
             control_tx: None,
             interval_ms,
+            drawn: Arc::new(AtomicU16::new(PanelSet::ALL.bits())),
         }
     }
 
@@ -142,6 +145,17 @@ impl App {
     pub fn with_control_sender(mut self, tx: Sender<Control>) -> Self {
         self.control_tx = Some(tx);
         self
+    }
+
+    /// The set of drawn panels that the sampler reads.
+    pub fn with_drawn_panels(mut self, drawn: Arc<AtomicU16>) -> Self {
+        self.drawn = drawn;
+        self
+    }
+
+    /// Tells the sampler which panels this frame drew. `ui::draw` calls it after layout.
+    pub fn publish_drawn(&self, panels: PanelSet) {
+        self.drawn.store(panels.bits(), Ordering::Relaxed);
     }
 
     /// Sends one message to the sampler. False when there is no sampler to take it.
