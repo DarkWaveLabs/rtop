@@ -1587,6 +1587,20 @@ mod tests {
         assert!(live.task(me).is_ok());
         assert!(live.short(me).is_ok());
         assert_eq!(live.task(-5), Err(Fail::Gone), "no such PID");
+
+        // A child's `p_puniqueid` is this process's `p_uniqueid`: the field after
+        // `p_uniqueid` is where the struct says, so `p_uniqueid` is too.
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let info = pid_info::<ProcUniqIdentifierInfo>(pid_t::try_from(child.id()).unwrap());
+        child.kill().unwrap();
+        child.wait().unwrap();
+        let info = info.expect("child unique ID");
+        assert_eq!(info.p_puniqueid, ident, "parent's unique ID");
+        assert_ne!(info.p_uniqueid, ident);
+        assert!(info.p_uniqueid > 0);
     }
 
     #[test]
@@ -1882,6 +1896,11 @@ mod tests {
             name: "sleep".into(),
         };
         let self_pid = std::process::id();
+        assert_ne!(
+            ident(first.id()),
+            ident(second.id()),
+            "each process has its own identity"
+        );
 
         let term = KillRequest {
             target: target(first.id(), ident(first.id())),
