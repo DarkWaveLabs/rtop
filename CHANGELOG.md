@@ -6,6 +6,29 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+CPU round 1. A user reported that htop used about 0.2% CPU and rtop about 1.5%. On an M5 Mac with about 600 processes at a 1 s interval, rtop now uses about 0.33% of one core, against 2.85% before (htop: 0.26% to 0.47% on the same host). At 250 ms it uses about 1.1%, against 9.1% before. See `PERF-PLAN.md`.
+
+### Security
+
+- **macOS: environment variables no longer show in the command column.** For a process with empty arguments, such as one that changes its own title (Node, Electron helpers), the command line that `sysinfo` parsed ran past the arguments into the environment, so secrets in it could show on screen. rtop now parses the argument area itself and stops at the argument count.
+- **macOS: the kill check now works for other users' and setuid processes.** It compares `p_uniqueid`, which every process has. Before, it compared a start time of 0 with 0 for processes that rtop cannot read, such as `login`, so a reused PID passed the check.
+
+### Changed
+
+- **Lower CPU use on every OS.** The sampler blocks until the next tick, not waking 20 times a second, and a tick reads only what it needs.
+- **Linux and macOS read processes directly** (`/proc` and `libproc`), not through `sysinfo`. On Linux rtop no longer reads every thread as a process; on macOS it no longer copies each process's argument area on each tick.
+- **macOS reads network and disk I/O counters directly** (`sysctl` and IOKit `Statistics`).
+- **Sensors** refresh only while the sensors panel is on screen: the 12 hottest each 5 s and all of them each 30 s. A host whose last reading had no temperatures is scanned again each 30 s.
+- **Disk space** refreshes each 30 s while the storage panel is on screen, and only for the disks rtop shows. A new disk still shows within 5 s.
+- **Pause** (`space`) now stops sampling, so a paused rtop uses no CPU for sampling. Kills still work while paused.
+- The process table builds rows only for the lines it shows.
+- macOS: other users' processes show their user and parent. The thread count updates on each tick. A process that goes idle shows 0% CPU, not its last busy value.
+- On Linux and macOS, a new process shows its command line at once, not after up to 5 s.
+
+### Fixed
+
+- macOS: disk space now updates after a large write. `sysinfo` could return a value cached on the volume URL.
+
 ## [0.2.0] - 2026-10-17
 
 The first public release. Versions 0.1.0 and 0.1.1 were private builds.

@@ -23,7 +23,7 @@ rtop uses 24-bit colour, rounded box characters and Braille glyphs. Use a termin
 | `-h`, `--help` | Show the help text, with the key list. |
 | `-V`, `--version` | Show the version. |
 
-The refresh interval sets how often rtop samples. Slow data refreshes less often: the disk list and space, sensors, the battery, the user list and command lines refresh every 5 seconds, and so do macOS thread counts.
+The refresh interval sets how often rtop samples. Slow data refreshes less often. Every 5 seconds: the disk list, the battery and command lines that are still empty. While the sensors panel is on screen: the hottest sensors every 5 seconds and all sensors every 30 seconds. While the storage panel is on screen: disk space every 30 seconds. While rtop is paused, it samples nothing. The [architecture page](architecture.md#sampling-cadence) has the full table.
 
 ## Keys
 
@@ -139,9 +139,9 @@ The table adds columns as the terminal gets wider.
 
 On Windows, the S and THR columns are hidden. On FreeBSD, THR shows `-`.
 
-Without root, the OS hides some data about other users' processes. Their READ/s and WRITE/s show `0`, not `-`, because rtop cannot tell a hidden counter from an idle one. On macOS, their command lines stay `[name]`.
+Without root, the OS hides some data about other users' processes. Their READ/s and WRITE/s show `0`, not `-`, because rtop cannot tell a hidden counter from an idle one. On macOS, their CPU% and MEM also show `0`, THR shows `-` and their command lines stay `[name]`; their user and parent show.
 
-The `s` key goes to the next sort column in this order: CPU, memory, I/O, PID, name. CPU, memory and I/O sort from high to low. PID and name sort from low to high. The `r` key reverses the direction. A command line is read on a slow tick, so a new process shows as `[name]` for up to 5 seconds when you show command lines.
+The `s` key goes to the next sort column in this order: CPU, memory, I/O, PID, name. CPU, memory and I/O sort from high to low. PID and name sort from low to high. The `r` key reverses the direction. On Linux and macOS, rtop reads a command line when it first sees a process. On Windows and FreeBSD it reads it on the next 5-second tick, so a new process shows as `[name]` for up to 5 seconds when you show command lines.
 
 The filter (`/`) matches part of a process name, ignoring case, or an exact PID. When you show command lines (`c`), it also matches the command line.
 
@@ -152,7 +152,7 @@ Select a process and press `x` or `F9`. rtop then asks before it sends a signal.
 - **Confirm prompt.** The prompt names the PID and the process. `y` sends `TERM`. `f` sends `KILL`. `n` or `Esc` cancels.
 - **The target is fixed.** rtop takes the target from the row that the last frame highlighted, and the prompt keeps it. A re-sort cannot change which process gets the signal.
 - **Protected PIDs.** rtop refuses PID 0, PID 1, its own PID and (on Windows) the System process, PID 4. It refuses before it opens the prompt, and again when it sends the signal.
-- **PID reuse.** Before it signals, the sampler reads the process again and compares the start time. If the PID now belongs to a new process, rtop does not send the signal and says so.
+- **PID reuse.** Before it signals, the sampler reads the process again and compares its identity: the unique process ID on macOS, and the start time on Linux, Windows and FreeBSD. If the PID now belongs to a new process, rtop does not send the signal and says so.
 - **Paste cannot trigger it.** rtop turns on bracketed paste, so pasted text arrives as one event, not as key presses. A paste cancels the prompt. Any key other than `y`, `f`, `n` and `Esc` also cancels it, and `y` or `f` pressed before a frame has shown the prompt cancels it.
 - **Windows.** `f` opens the process, checks its creation time and calls `TerminateProcess` on that same handle. `y` (`TERM`) is not supported on Windows, and rtop tells you so.
 - **Permissions.** If the OS refuses the signal, the footer says `permission denied or process gone`. rtop does not escalate.

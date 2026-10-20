@@ -12,7 +12,8 @@ Module map. Data modules collect and compute with no drawing code; each has a ma
 | `panel.rs` | Panel identities and the set of visible panels, shared by layout, config and app. |
 | `help.rs` | The one key table (`KEYMAP`), read by the help overlay and `--help`. |
 | `config.rs` | Config file: a flat TOML subset parser and the default path rules. |
-| `process.rs` | Process data, sorting, filtering, the tree view and kill. |
+| `process.rs` | Process data, sorting, filtering, the tree view, the kill types, and helpers for the collectors. |
+| `process/` | One process collector for each source: `linux.rs` reads `/proc`, `macos.rs` reads `libproc`, `sysinfo_procs.rs` serves Windows and FreeBSD. |
 | `storage.rs` | Filesystem usage and disk I/O rates. |
 | `zfs.rs` | ZFS ARC statistics: kstat parser, hit-ratio window and a reader for each OS. |
 | `sensors.rs` | Temperatures, and battery state for each OS. |

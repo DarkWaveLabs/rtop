@@ -74,10 +74,20 @@ These rules come from the existing code. Follow them in new code.
 - **`cfg` for each target.** Put OS-specific code behind `#[cfg(target_os = "...")]` (or `cfg(windows)`), and give every other OS a fallback that returns `None` or nothing. A function that only one OS uses must not be dead code on the others. Clippy for each target finds this.
 - **No new dependencies without a reason.** rtop has three direct crates on every OS, plus `libc`, `objc2-*` and `windows` for some targets. Before you add a crate, check if a small hand-written function does the job (the config parser and the CLI parser are hand-written for this reason). If you add a crate, say in the pull request what it adds to `Cargo.lock` and to the binary size.
 - **Keep the binary small.** The release profile optimises for size. Compare the stripped release binary before and after your change (`cargo build --release`, then `ls -l target/release/rtop`). Explain any growth of more than a few KiB.
-- **Keep sampling cheap.** The sampler runs as often as every 250 ms. Put slow reads (disk lists, sensors, command lines) on the slow tick.
+- **Keep sampling cheap.** The sampler runs as often as every 250 ms. Read only what a tick needs, read a value once when it does not change (names, command lines), and give slow reads (disk lists, sensors, disk space) their own period in `Clocks::plan`. Measure a change that touches the sampler (see [Measure CPU use](#measure-cpu-use)).
 - **One key table.** Keys live in `src/help.rs` (`KEYMAP`). The help overlay and `--help` both read it. Add a new key there, and handle it in `app.rs`.
 - **No locks.** The sampler owns the `sysinfo` handles and sends snapshots over a channel. Keep shared state out of the UI thread.
 - **Spelling.** Docs and comments use South African English (colour, organise, licence).
+
+## Measure CPU use
+
+rtop should cost about as much CPU as htop. Three tools measure it:
+
+- `cargo test --release sample_cost -- --ignored --nocapture` times each kind of sampler tick on this host.
+- `cargo test --release collector_cost -- --ignored --nocapture` prints the thread CPU time and wall time of each collector. Wall time also counts waits on other processes, such as the sensor service on macOS.
+- `scripts/cpubench.py` runs a build in a pseudo-terminal for a fixed time and prints its CPU use. Compare two builds, or rtop and htop, at the same interval and terminal size. See [`scripts/README.md`](scripts/README.md).
+
+Say in the pull request what you measured, before and after.
 
 ## Commits
 

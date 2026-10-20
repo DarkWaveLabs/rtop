@@ -42,7 +42,7 @@ Many terminal monitors leave out the ZFS ARC, which can hold a large share of RA
 - **Sensors.** Temperatures in °C or °F, and the battery level and state.
 - **Network.** Total rates with sparklines, or a view for each interface (`n`).
 - **Processes.** Sort, filter, a tree view, command lines and per-process disk I/O.
-- **Safe kill.** A confirm prompt that checks the PID and start time again before it sends a signal.
+- **Safe kill.** A confirm prompt that checks the PID and process identity again before it sends a signal.
 - **Adaptive layout.** Panels collapse in a fixed order, and it works at 80×24. Keys `1` to `8` show or hide each panel.
 - **Private.** An optional config file. No telemetry, no network ports, and no data leaves the machine.
 

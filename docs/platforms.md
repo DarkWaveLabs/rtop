@@ -33,11 +33,22 @@ rtop is one code base. Each OS has its own readers behind `cfg` attributes, so a
 5. On FreeBSD, `sysinfo` fills these values from the kernel's block counters, not byte counts. Treat them as a rough guide.
 6. rtop shows what the `sysinfo` crate finds. On Windows it reads one thermal-zone value. On FreeBSD it reads `dev.cpu.<n>.temperature`, which needs a CPU temperature driver. The panel is hidden when the host reports nothing.
 
+## Data sources
+
+| Data | Linux | macOS | Windows | FreeBSD |
+|---|---|---|---|---|
+| Processes and kill check | `/proc`, read by rtop | `libproc`, read by rtop | `sysinfo` | `sysinfo` |
+| Network counters | `/sys/class/net`, read by rtop | `sysctl` (`NET_RT_IFLIST2`, `IFMIB_IFDATA`), read by rtop | `sysinfo` | `sysinfo` |
+| Disk I/O counters | `sysinfo` (`/proc/diskstats`) | IOKit `Statistics`, read by rtop | `sysinfo` | `sysinfo` |
+| CPU, memory, disk list, sensors, users | `sysinfo` | `sysinfo` | `sysinfo` | `sysinfo` |
+
+rtop reads processes, and on macOS the network and disk counters, directly because `sysinfo` makes many more system calls for them on each refresh. On macOS, without root, another user's process shows its user, parent and state, but its CPU, memory, threads, I/O and command line stay hidden, as `ps` shows them.
+
 ## What is tested
 
 | Platform | Status |
 |---|---|
-| Linux | Unit tests, `clippy` and `rustfmt` run in CI on every pull request. The screenshots come from a Linux container (Alpine, arm64). |
+| Linux | Unit tests, `clippy` and `rustfmt` run in CI on every pull request. The screenshots come from a Linux container (Alpine, arm64). The native process collector has fixture tests on every host; its live tests run only on Linux. |
 | macOS | Developed on macOS. The release workflow builds the universal binary. CI does not run macOS tests. |
 | Windows | The release workflow builds the binary and runs `--help`. `clippy` passes for `x86_64-pc-windows-msvc`. **Not yet run-tested** on a live system. |
 | FreeBSD | `clippy` passes for `x86_64-unknown-freebsd`. It **builds, but it is not yet run-tested**. No release binary. |
