@@ -279,7 +279,8 @@ enum Kind {
 struct UserProc {
     name: Arc<str>,
     cmd: Arc<str>,
-    ruid: u32,
+    /// The real UID. `None` while `status` cannot be read; tried again on slow ticks.
+    ruid: Option<u32>,
     /// CPU time at the last sample, in clock ticks.
     cpu: u64,
     io: Io,
@@ -368,7 +369,9 @@ impl State {
                 continue;
             }
             if let Some((info, ruid)) = self.read(fs, pid, secs, slow) {
-                if info.user.is_none() {
+                if info.user.is_none()
+                    && let Some(ruid) = ruid
+                {
                     missed.push((out.len(), ruid));
                 }
                 out.push(info);
@@ -389,14 +392,14 @@ impl State {
         out
     }
 
-    /// One PID: the row and its real UID, or `None` to leave it out.
+    /// One PID: the row and its real UID (when known), or `None` to leave it out.
     fn read(
         &mut self,
         fs: &mut impl Procfs,
         pid: u32,
         secs: f64,
         slow: bool,
-    ) -> Option<(ProcInfo, u32)> {
+    ) -> Option<(ProcInfo, Option<u32>)> {
         let tick = self.tick;
         if !slow
             && let Some(known) = self.known.get_mut(&pid)
@@ -439,6 +442,9 @@ impl State {
         let delta_ns = ticks_to_ns(stat.cpu_ticks().saturating_sub(user.cpu), self.clk_tck);
         user.cpu = stat.cpu_ticks();
         let (read_rate, write_rate) = user.io.sample(fs, pid, secs);
+        if slow && user.ruid.is_none() {
+            user.ruid = fs.read(pid, ProcFile::Status).ok().and_then(parse_uid);
+        }
         if slow
             && user.cmd.is_empty()
             && let Ok(buf) = fs.read(pid, ProcFile::Cmdline)
@@ -462,14 +468,11 @@ impl State {
         pid: u32,
         stat: &Stat,
         name: Arc<str>,
-    ) -> Option<(ProcInfo, u32)> {
-        // Without its user the row is not complete: leave it out, and try again on the
-        // next tick. `stat` and `status` have the same access rules, so this happens only
-        // when the process exits between the two reads.
-        let Some(ruid) = fs.read(pid, ProcFile::Status).ok().and_then(parse_uid) else {
-            self.known.remove(&pid);
-            return None;
-        };
+    ) -> Option<(ProcInfo, Option<u32>)> {
+        // `stat` and `status` have the same access rules, so `status` fails mostly when
+        // the process exits between the two reads. The row is listed without a user, as
+        // `sysinfo` lists it, and `status` is read again on slow ticks.
+        let ruid = fs.read(pid, ProcFile::Status).ok().and_then(parse_uid);
         let cmd = fs
             .read(pid, ProcFile::Cmdline)
             .map(parse_cmdline)
@@ -512,7 +515,7 @@ fn row(
         ident,
         name: Arc::clone(&user.name),
         cmd: Arc::clone(&user.cmd),
-        user: users.get(user.ruid),
+        user: user.ruid.and_then(|ruid| users.get(ruid)),
         state: state_from_code(stat.state),
         threads: u32::try_from(stat.threads).ok(),
         cpu: 0.0,
@@ -1115,7 +1118,7 @@ mod tests {
         let Kind::User(user) = &s.known[&10].kind else {
             panic!("a user process");
         };
-        assert_eq!(user.ruid, 0);
+        assert_eq!(user.ruid, Some(0));
     }
 
     #[test]
@@ -1145,22 +1148,40 @@ mod tests {
         k.fail(1, ProcFile::Stat, Fail::NotFound);
         k.process(2, sleeping(2), "x");
         k.set(2, ProcFile::Stat, b"2 (x");
-        // status fails on first sight: left out, and tried again on the next tick.
-        k.process(3, sleeping(3), "late");
-        k.fail(3, ProcFile::Status, Fail::Other);
         k.process(4, sleeping(4), "kept");
         let mut s = state();
-        let rows = s.collect(&mut k, &[0, 1, 2, 3, 4], 1.0, false);
+        let rows = s.collect(&mut k, &[0, 1, 2, 4], 1.0, false);
         assert_eq!(rows.iter().map(|p| p.pid).collect::<Vec<_>>(), [4]);
         assert!(
             !k.calls().iter().any(|&(_, pid)| pid == 0),
             "PID 0 is skipped"
         );
-        assert!(!s.known.contains_key(&3));
+    }
+
+    #[test]
+    fn unreadable_status_lists_the_process_without_a_user() {
+        let mut k = Fake::default();
+        k.users.insert(1000, "chad".into());
+        k.process(3, sleeping(3), "late");
+        k.fail(3, ProcFile::Status, Fail::Other);
+        let mut s = state();
+        let rows = s.collect(&mut k, &[3], 1.0, true);
+        let p = row_of(&rows, 3);
+        assert_eq!((&*p.name, p.user.as_deref()), ("late", None), "listed");
+        assert!(
+            !k.calls().contains(&("users", 0)),
+            "no UID, so no user-list reload"
+        );
 
         k.set(3, ProcFile::Status, STATUS);
-        let rows = s.collect(&mut k, &[3, 4], 1.0, false);
-        assert_eq!(&*row_of(&rows, 3).name, "late");
+        let rows = s.collect(&mut k, &[3], 1.0, false);
+        assert_eq!(row_of(&rows, 3).user, None);
+        assert!(!k.calls().contains(&("status", 3)), "not on a fast tick");
+        let rows = s.collect(&mut k, &[3], 1.0, true);
+        assert!(k.calls().contains(&("status", 3)), "read on a slow tick");
+        assert_eq!(row_of(&rows, 3).user.as_deref(), Some("chad"));
+        s.collect(&mut k, &[3], 1.0, true);
+        assert!(!k.calls().contains(&("status", 3)), "read once it is known");
     }
 
     #[test]
