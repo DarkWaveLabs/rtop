@@ -57,8 +57,8 @@ pub struct StorageCollector {
     /// has no space values until it is read.
     listed: HashSet<(String, String)>,
     /// (total, available) bytes by (device, mount). Read only for disks that `keep_mount`
-    /// keeps: on the space read and for disks new in a list. A disk without an entry has
-    /// total 0, so `keep_volume` drops it.
+    /// keeps: on the space read, and on each re-list for disks that are new or have no
+    /// total yet. A disk without an entry has total 0, so `keep_volume` drops it.
     space: HashMap<(String, String), (u64, u64)>,
     /// mount → io_group. Filled on re-lists on macOS only; empty elsewhere.
     groups: HashMap<String, String>,
@@ -91,8 +91,8 @@ impl StorageCollector {
     }
 
     /// The I/O counters of one disk for each I/O group refresh on every call. With `slow`,
-    /// the disk list refreshes too, and only disks that are new since the last list read
-    /// their space. With `space`, the list refreshes and every disk that `keep_mount`
+    /// the disk list refreshes too, and only disks that are new since the last list, or
+    /// have no total yet, read their space. With `space`, the list refreshes and every disk that `keep_mount`
     /// keeps reads its space.
     pub fn collect(&mut self, secs: f64, slow: bool, space: bool) -> Storage {
         let relisted = (slow || space).then(|| self.relist(space));
@@ -224,13 +224,13 @@ impl StorageCollector {
             .iter()
             .map(|disk| disk.file_system().to_string_lossy().into_owned())
             .collect();
-        let new = new_disks(&self.listed, &keys);
+        let plan = relist_plan(&self.listed, &self.space, &keys);
         let mounts: Vec<(&str, &str)> = keys
             .iter()
             .zip(&file_systems)
             .map(|((_, mount), fs)| (mount.as_str(), fs.as_str()))
             .collect();
-        for i in space_reads(&mounts, &new, all_space) {
+        for i in space_reads(&mounts, &plan.unread, all_space) {
             if let (Some(disk), Some(key)) = (self.disks.list_mut().get_mut(i), keys.get(i)) {
                 let read = read_space(disk);
                 if let Some(space) = merge_space(self.space.get(key).copied(), read) {
@@ -239,7 +239,6 @@ impl StorageCollector {
             }
         }
         let now: HashSet<(String, String)> = keys.into_iter().collect();
-        let changed = !new.is_empty() || self.listed.iter().any(|key| !now.contains(key));
         self.space.retain(|key, _| now.contains(key));
         self.listed = now;
         #[cfg(target_os = "macos")]
@@ -252,7 +251,7 @@ impl StorageCollector {
             .filter(|mount| is_file_mount(mount))
             .map(|mount| mount.to_string_lossy().into_owned())
             .collect();
-        changed
+        plan.changed
     }
 
     /// The usage of each disk in `raws` (the disk list, in order): read for the disks in
@@ -370,8 +369,9 @@ fn merge_space(
 }
 
 /// Pure. Indices of the disks whose space a re-list reads: those that `keep_mount` keeps,
-/// all of them with `all`, else only the `new` ones. Items are (mount, file_system).
-fn space_reads(items: &[(&str, &str)], new: &[usize], all: bool) -> Vec<usize> {
+/// all of them with `all`, else only the `unread` ones (see `relist_plan`). Items are
+/// (mount, file_system).
+fn space_reads(items: &[(&str, &str)], unread: &[usize], all: bool) -> Vec<usize> {
     let wanted = |i: &usize| {
         items
             .get(*i)
@@ -380,7 +380,7 @@ fn space_reads(items: &[(&str, &str)], new: &[usize], all: bool) -> Vec<usize> {
     if all {
         (0..items.len()).filter(wanted).collect()
     } else {
-        new.iter().copied().filter(wanted).collect()
+        unread.iter().copied().filter(wanted).collect()
     }
 }
 
@@ -503,6 +503,42 @@ fn shared_usage(groups: &[&str], own: &[DiskUsage], refreshed: &[usize]) -> Vec<
         .zip(own)
         .map(|(group, usage)| by_group.get(group).copied().unwrap_or(*usage))
         .collect()
+}
+
+/// What a re-list does with the disks it found.
+#[derive(Debug)]
+struct RelistPlan {
+    /// Indices of the disks whose space to read even without the full space read.
+    unread: Vec<usize>,
+    /// True when a disk came or went.
+    changed: bool,
+}
+
+/// Pure. The plan of a re-list from the keys of the last list (`listed`, before it is
+/// replaced), the space read so far, and the (device, mount) keys `now`, in list order.
+/// A disk is unread when it is new, or when no read gave it a total yet: `keep_volume`
+/// drops it, so with no other volume the storage panel is never drawn and the full space
+/// read never comes.
+fn relist_plan(
+    listed: &HashSet<(String, String)>,
+    space: &HashMap<(String, String), (u64, u64)>,
+    now: &[(String, String)],
+) -> RelistPlan {
+    let new = new_disks(listed, now);
+    let gone = {
+        let now: HashSet<&(String, String)> = now.iter().collect();
+        listed.iter().any(|key| !now.contains(key))
+    };
+    let unread = now
+        .iter()
+        .enumerate()
+        .filter(|(i, key)| new.contains(i) || space.get(*key).is_none_or(|(total, _)| *total == 0))
+        .map(|(i, _)| i)
+        .collect();
+    RelistPlan {
+        changed: !new.is_empty() || gone,
+        unread,
+    }
 }
 
 /// Pure. Indices in `now` of the (device, mount) keys that are not in `listed`.
@@ -1172,6 +1208,52 @@ mod tests {
         assert!(new_disks(&listed, &[]).is_empty());
     }
 
+    #[test]
+    fn a_relist_reads_new_disks_and_disks_without_space() {
+        let listed = HashSet::from([
+            key("disk3", "/"),
+            key("disk3", "/System/Volumes/Data"),
+            key("USB", "/Volumes/USB"),
+            key("Gone", "/Volumes/Gone"),
+        ]);
+        let space = HashMap::from([
+            (key("disk3", "/"), (100, 40)),
+            (key("disk3", "/System/Volumes/Data"), (0, 0)),
+        ]);
+        let now = [
+            key("disk3", "/"),
+            key("disk3", "/System/Volumes/Data"),
+            key("USB", "/Volumes/USB"),
+            key("New", "/Volumes/New"),
+        ];
+        let plan = relist_plan(&listed, &space, &now);
+        assert_eq!(
+            plan.unread,
+            [1, 2, 3],
+            "a total of 0, no space entry, a new disk"
+        );
+        assert!(plan.changed, "a disk came and one went");
+
+        let same: HashSet<_> = now.iter().cloned().collect();
+        let full = HashMap::from([
+            (key("disk3", "/"), (100, 40)),
+            (key("disk3", "/System/Volumes/Data"), (100, 40)),
+            (key("USB", "/Volumes/USB"), (8, 1)),
+            (key("New", "/Volumes/New"), (8, 1)),
+        ]);
+        let plan = relist_plan(&same, &full, &now);
+        assert!(plan.unread.is_empty(), "every disk has its space");
+        assert!(!plan.changed);
+
+        let plan = relist_plan(&same, &full, &now[..3]);
+        assert!(plan.changed, "a disk went");
+        assert!(plan.unread.is_empty());
+
+        let plan = relist_plan(&HashSet::new(), &HashMap::new(), &now);
+        assert_eq!(plan.unread, [0, 1, 2, 3], "the first list");
+        assert!(plan.changed);
+    }
+
     fn usage(read: u64, written: u64) -> DiskUsage {
         DiskUsage {
             read_bytes: read,
@@ -1183,8 +1265,8 @@ mod tests {
 
     #[test]
     fn a_group_shares_its_refreshed_usage_on_a_relist_tick() {
-        // On a re-list tick every disk read its counter, but only disk 0 was also read on
-        // the fast ticks before. Disk 1's own delta spans 5 s, so it takes disk 0's.
+        // Only the leaders (disks 0 and 2) read their counters. Disk 1 is in disk 0's
+        // group, and its own usage is stale, so it takes disk 0's.
         let groups = ["disk3", "disk3", "disk4", "tank"];
         let own = [usage(100, 10), usage(500, 50), usage(7, 1), usage(9, 9)];
         let leaders = [0, 2];
@@ -1221,7 +1303,7 @@ mod tests {
         assert_eq!(
             space_reads(&items, &[1, 3, 4], false),
             [4],
-            "a re-list reads only new disks"
+            "a re-list reads only unread disks"
         );
         assert!(space_reads(&items, &[], false).is_empty());
         assert!(space_reads(&items, &[99], false).is_empty(), "a bad index");
@@ -1341,7 +1423,10 @@ mod tests {
         );
         let failed = advance_counter(&mut last, None);
         assert_eq!((failed.read_bytes, failed.written_bytes), (0, 0));
-        assert_eq!(failed.total_read_bytes, 800, "the failed tick keeps the totals");
+        assert_eq!(
+            failed.total_read_bytes, 800,
+            "the failed tick keeps the totals"
+        );
         let next = advance_counter(&mut last, Some((2_000, 190)));
         assert_eq!(
             (next.read_bytes, next.written_bytes),
