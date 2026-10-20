@@ -25,7 +25,7 @@ use super::{
     io_rate, join_cmd,
 };
 #[cfg(target_os = "linux")]
-use super::{KillReport, system_user_names};
+use super::{KillReport, online_cpus, system_user_names};
 
 /// `PF_KTHREAD` from `include/linux/sched.h`: the task is a kernel thread.
 const PF_KTHREAD: u64 = 0x0020_0000;
@@ -524,11 +524,10 @@ impl Default for ProcCollector {
 #[cfg(target_os = "linux")]
 impl ProcCollector {
     pub fn new() -> Self {
-        let cpus = std::thread::available_parallelism().map_or(1, usize::from);
         Self {
             live: Live::default(),
             state: State::new(
-                cpus,
+                online_cpus(),
                 sysconf(libc::_SC_CLK_TCK, 100),
                 sysconf(libc::_SC_PAGESIZE, 4096),
             ),
@@ -1270,6 +1269,32 @@ mod tests {
         let procs = collector.collect(&mut sys, secs, false);
         let me = row_of(&procs, std::process::id());
         assert!(me.cpu > 20.0, "busy test thread: {}%", me.cpu);
+    }
+
+    /// The CPU cap counts the host's CPUs, not the ones rtop may run on. A thread pinned to
+    /// CPU 0 makes the collector as `taskset -c 0 rtop` would.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cpu_cap_ignores_rtop_affinity() {
+        let (pinned, parallelism, cpus) = std::thread::spawn(|| {
+            // SAFETY: `set` is a `cpu_set_t` (plain integers, so zeroed is valid) that
+            // lives for both calls and is passed with its own size. PID 0 is this thread.
+            let pinned = unsafe {
+                let mut set: libc::cpu_set_t = std::mem::zeroed();
+                libc::CPU_SET(0, &mut set);
+                libc::sched_setaffinity(0, size_of::<libc::cpu_set_t>(), &raw const set) == 0
+            };
+            let parallelism = std::thread::available_parallelism().map_or(1, usize::from);
+            (pinned, parallelism, ProcCollector::new().state.cpus)
+        })
+        .join()
+        .unwrap();
+        let online = online_cpus();
+        println!("online {online}, pinned {pinned}, available_parallelism {parallelism}");
+        if pinned {
+            assert_eq!(parallelism, 1, "the pin took");
+        }
+        assert_eq!(cpus, online);
     }
 
     /// The test reads the native list (A), the `sysinfo` list (S) and the native list again

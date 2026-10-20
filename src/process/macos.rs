@@ -30,7 +30,7 @@ use sysinfo::System;
 
 use super::{
     KillError, KillReport, KillRequest, KillSignal, ProcInfo, ProcState, UserNames, check_target,
-    cpu_percent, io_rate, join_cmd, system_user_names,
+    cpu_percent, io_rate, join_cmd, online_cpus, system_user_names,
 };
 
 /// `PROC_PIDUNIQIDENTIFIERINFO` from XNU `sys/proc_info.h`. Not in `libc` 0.2.190.
@@ -152,12 +152,11 @@ impl Default for ProcCollector {
 
 impl ProcCollector {
     pub fn new() -> Self {
-        let cpus = std::thread::available_parallelism().map_or(1, usize::from);
         // SAFETY: `geteuid` takes no arguments and cannot fail.
         let euid = unsafe { libc::geteuid() };
         Self {
             live: Live::default(),
-            state: State::new(cpus, euid, Timebase::read()),
+            state: State::new(online_cpus(), euid, Timebase::read()),
             pids: Vec::new(),
         }
     }
