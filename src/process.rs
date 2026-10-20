@@ -372,7 +372,8 @@ pub(crate) fn cpu_percent(delta_ns: u64, secs: f64, cpus: usize) -> f32 {
 /// The CPUs the host has online, for the cap of `cpu_percent`. Not
 /// `available_parallelism`, which follows rtop's own affinity mask and, on Linux, its
 /// cgroup quota: under `taskset -c 0 rtop`, another process's `make -j16` would show at
-/// most 100%. 1 when `sysconf` fails.
+/// most 100%. 1 when `sysconf` fails. On Linux with musl, `sysconf` counts the affinity
+/// mask too, so the Linux collector reads sysfs first.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) fn online_cpus() -> usize {
     // SAFETY: a plain call with no pointers; it returns -1 on error.

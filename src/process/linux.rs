@@ -214,6 +214,23 @@ fn ticks_to_ns(ticks: u64, clk_tck: u64) -> u64 {
     u64::try_from(ns).unwrap_or(u64::MAX)
 }
 
+/// Pure. The number of CPUs in a kernel CPU list such as `0-3,5,7-8`. `None` when the
+/// text is not one.
+fn count_cpu_list(text: &str) -> Option<usize> {
+    let mut count = 0usize;
+    for part in text.trim().split(',') {
+        let (first, last) = match part.split_once('-') {
+            Some((first, last)) => (first.parse::<usize>().ok()?, last.parse().ok()?),
+            None => {
+                let cpu = part.parse::<usize>().ok()?;
+                (cpu, cpu)
+            }
+        };
+        count = count.checked_add(last.checked_sub(first)? + 1)?;
+    }
+    Some(count)
+}
+
 /// Pure. A PID from a `/proc` entry name: digits only, not 0.
 fn pid_from_name(name: &str) -> Option<u32> {
     if name.is_empty() || !name.bytes().all(|b| b.is_ascii_digit()) {
@@ -527,7 +544,7 @@ impl ProcCollector {
         Self {
             live: Live::default(),
             state: State::new(
-                online_cpus(),
+                host_cpus(),
                 sysconf(libc::_SC_CLK_TCK, 100),
                 sysconf(libc::_SC_PAGESIZE, 4096),
             ),
@@ -557,6 +574,18 @@ impl ProcCollector {
             result: signal(&mut self.live, req, self_pid),
         }
     }
+}
+
+/// The CPUs the host has online, from `/sys/devices/system/cpu/online` as glibc reads
+/// them. musl's `sysconf(_SC_NPROCESSORS_ONLN)` counts rtop's affinity mask instead, so
+/// it is only the fallback.
+#[cfg(target_os = "linux")]
+fn host_cpus() -> usize {
+    std::fs::read_to_string("/sys/devices/system/cpu/online")
+        .ok()
+        .and_then(|text| count_cpu_list(&text))
+        .filter(|&n| n > 0)
+        .unwrap_or_else(online_cpus)
 }
 
 /// `sysconf(name)`, or `fallback` when it is not a positive number.
@@ -1289,12 +1318,22 @@ mod tests {
         })
         .join()
         .unwrap();
-        let online = online_cpus();
-        println!("online {online}, pinned {pinned}, available_parallelism {parallelism}");
+        let host = host_cpus();
+        println!("host {host}, pinned {pinned}, available_parallelism {parallelism}");
         if pinned {
             assert_eq!(parallelism, 1, "the pin took");
         }
-        assert_eq!(cpus, online);
+        assert_eq!(cpus, host);
+    }
+
+    #[test]
+    fn counts_a_cpu_list() {
+        assert_eq!(count_cpu_list("0-3\n"), Some(4));
+        assert_eq!(count_cpu_list("0\n"), Some(1));
+        assert_eq!(count_cpu_list("0-3,5,7-8"), Some(7));
+        for bad in ["", "\n", "x", "3-1", "0-", "-2", "0,,1"] {
+            assert_eq!(count_cpu_list(bad), None, "{bad:?}");
+        }
     }
 
     /// The test reads the native list (A), the `sysinfo` list (S) and the native list again
