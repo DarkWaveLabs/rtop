@@ -616,6 +616,16 @@ fn counter_usage(last: Option<(u64, u64)>, now: Option<(u64, u64)>) -> DiskUsage
     }
 }
 
+/// Pure. The usage of a read that gave `now`, from the baseline in `last`, which then
+/// becomes `now`. A failed read drops the baseline, so the next good read is a first read
+/// and moves no bytes: a rate never spans a gap.
+#[cfg(any(test, target_os = "macos"))]
+fn advance_counter(last: &mut Option<(u64, u64)>, now: Option<(u64, u64)>) -> DiskUsage {
+    let usage = counter_usage(*last, now);
+    *last = now;
+    usage
+}
+
 /// Pure. True when a group's driver must be looked up: it has none (`failed` is `None`),
 /// its last read failed, or the disk list changed (`recheck`).
 #[cfg(any(test, target_os = "macos"))]
@@ -649,7 +659,7 @@ mod apple {
     };
     use sysinfo::DiskUsage;
 
-    use super::{counter_usage, needs_lookup};
+    use super::{advance_counter, needs_lookup};
 
     /// `MACH_PORT_NULL`: IOKit then uses its default main port.
     const DEFAULT_PORT: libc::mach_port_t = 0;
@@ -823,10 +833,8 @@ mod apple {
                 return DiskUsage::default();
             };
             let now = driver.object.statistics();
-            let usage = counter_usage(driver.last, now);
             driver.failed = now.is_none();
-            driver.last = now.or(driver.last);
-            usage
+            advance_counter(&mut driver.last, now)
         }
     }
 
@@ -1319,6 +1327,32 @@ mod tests {
                 total_written_bytes: 80,
             },
             "a counter that went down moves nothing"
+        );
+    }
+
+    #[test]
+    fn a_rate_never_spans_a_failed_read() {
+        let mut last = None;
+        advance_counter(&mut last, Some((500, 70)));
+        assert_eq!(
+            advance_counter(&mut last, Some((800, 90))).read_bytes,
+            300,
+            "one tick"
+        );
+        let failed = advance_counter(&mut last, None);
+        assert_eq!((failed.read_bytes, failed.written_bytes), (0, 0));
+        assert_eq!(failed.total_read_bytes, 800, "the failed tick keeps the totals");
+        let next = advance_counter(&mut last, Some((2_000, 190)));
+        assert_eq!(
+            (next.read_bytes, next.written_bytes),
+            (0, 0),
+            "the first read after a gap is a first sample"
+        );
+        assert_eq!(next.total_read_bytes, 2_000);
+        assert_eq!(
+            advance_counter(&mut last, Some((2_100, 195))).read_bytes,
+            100,
+            "then rates go on"
         );
     }
 
