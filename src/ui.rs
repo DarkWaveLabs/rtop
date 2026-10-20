@@ -901,6 +901,50 @@ mod tests {
         assert!(!footer.contains("quit"), "{footer}");
     }
 
+    /// The cost of one full frame with a large process list. Run it in release:
+    /// `cargo test --release draw_cost -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "a benchmark, not a check"]
+    fn draw_cost() {
+        use ratatui::{Terminal, backend::TestBackend};
+        use std::time::Instant;
+
+        const PROCESSES: u32 = 2_000;
+        const FRAMES: u32 = 200;
+        let processes = (0..PROCESSES)
+            .map(|i| ProcInfo {
+                pid: 100 + i,
+                parent: Some(1),
+                ident: u64::from(i),
+                name: format!("worker-{i}").into(),
+                cmd: format!("/usr/bin/worker-{i} --serve --port {i}").into(),
+                user: Some("alice".into()),
+                threads: Some(4),
+                cpu: (i % 100) as f32,
+                memory: u64::from(i) << 20,
+                read_rate: u64::from(i % 7) * 1024,
+                write_rate: 0,
+                ..ProcInfo::default()
+            })
+            .collect();
+        let mut app = example_app(8, false);
+        app.handle(Event::Metrics(Snapshot {
+            processes,
+            ..app.snapshot.clone().unwrap()
+        }));
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+
+        let start = Instant::now();
+        for _ in 0..FRAMES {
+            terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        }
+        let mean = start.elapsed() / FRAMES;
+        println!(
+            "draw_cost: {PROCESSES} processes, 120x40, {FRAMES} frames, mean {mean:?} per frame"
+        );
+    }
+
     #[test]
     fn tiny_terminals_do_not_panic() {
         let modes = [
