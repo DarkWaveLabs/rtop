@@ -263,6 +263,41 @@ mod tests {
         );
     }
 
+    /// The cost of one sampler tick on this host, for performance work. Run it with
+    /// `cargo test --release sample_cost -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "reads the real machine and prints timings"]
+    fn sample_cost() {
+        const FAST: usize = 15;
+        const SLOW: usize = 5;
+        let mut sampler = Sampler::new();
+        thread::sleep(MINIMUM_CPU_UPDATE_INTERVAL);
+        // The first tick also discovers everything, so it is not counted.
+        let first = sampler.sample();
+        let mut fast = Vec::with_capacity(FAST);
+        let mut slow = Vec::with_capacity(SLOW);
+        for i in 0..FAST + SLOW {
+            thread::sleep(Duration::from_millis(100));
+            let is_slow = i % 4 == 0 && slow.len() < SLOW;
+            sampler.last_slow = if is_slow { None } else { Some(Instant::now()) };
+            let started = Instant::now();
+            sampler.sample();
+            let took = started.elapsed().as_secs_f64() * 1_000.0;
+            if is_slow { &mut slow } else { &mut fast }.push(took);
+        }
+        let stats = |v: &[f64]| {
+            let mean = v.iter().sum::<f64>() / v.len().max(1) as f64;
+            let max = v.iter().copied().fold(0.0, f64::max);
+            format!("mean {mean:.2} ms, max {max:.2} ms over {}", v.len())
+        };
+        println!(
+            "sample_cost: {} processes; fast tick {}; slow tick {}",
+            first.processes.len(),
+            stats(&fast),
+            stats(&slow)
+        );
+    }
+
     #[test]
     fn shrinkable_arc_counts_as_free_memory() {
         let arc = ZfsArc {
