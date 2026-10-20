@@ -13,7 +13,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 use sysinfo::Networks;
 use sysinfo::{MINIMUM_CPU_UPDATE_INTERVAL, System};
 
@@ -128,11 +128,14 @@ struct Disconnected;
 
 struct Sampler {
     sys: System,
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     networks: Networks,
     /// Not sysinfo's `Networks` on Linux: see `net::SysfsNet`.
     #[cfg(target_os = "linux")]
     networks: net::SysfsNet,
+    /// Not sysinfo's `Networks` on macOS: see `net::RouteNet`.
+    #[cfg(target_os = "macos")]
+    networks: net::RouteNet,
     last: Instant,
     clocks: Clocks,
     /// The panels the UI drew last, as `PanelSet` bits.
@@ -151,17 +154,16 @@ impl Sampler {
         let mut procs = ProcCollector::new();
         procs.collect(&mut sys, 1.0, true);
         #[cfg(target_os = "linux")]
-        let networks = {
-            let mut networks = net::SysfsNet::default();
-            // The first read only sets the baseline for the first rates.
-            networks.collect(0.0);
-            networks
-        };
+        let mut networks = net::SysfsNet::default();
+        #[cfg(target_os = "macos")]
+        let mut networks = net::RouteNet::default();
+        // The first read only sets the baseline for the first rates.
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        networks.collect(0.0);
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        let networks = Networks::new_with_refreshed_list();
         Self {
             sys,
-            #[cfg(not(target_os = "linux"))]
-            networks: Networks::new_with_refreshed_list(),
-            #[cfg(target_os = "linux")]
             networks,
             last: Instant::now(),
             clocks: Clocks::default(),
@@ -183,17 +185,11 @@ impl Sampler {
 
         self.sys.refresh_cpu_usage();
         self.sys.refresh_memory();
-        #[cfg(not(target_os = "linux"))]
-        self.networks.refresh(true);
 
         let secs = self.last.elapsed().as_secs_f64().max(0.001);
         self.last = Instant::now();
 
-        // `net::collect` leaves out loopback, which never leaves the machine.
-        #[cfg(not(target_os = "linux"))]
-        let interfaces = net::collect(&self.networks, secs);
-        #[cfg(target_os = "linux")]
-        let interfaces = self.networks.collect(secs);
+        let interfaces = self.read_networks(secs);
         let (rx_rate, tx_rate) = net::totals(&interfaces);
         let processes = self.procs.collect(&mut self.sys, secs, slow);
         let storage = self.storage.collect(secs, slow, work.space);
@@ -222,6 +218,18 @@ impl Sampler {
             zfs,
             sensors,
         }
+    }
+
+    /// The interfaces and their rates over the last `secs` seconds. The list leaves out
+    /// loopback, which never leaves the machine.
+    fn read_networks(&mut self, secs: f64) -> Vec<NetIface> {
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            self.networks.refresh(true);
+            net::collect(&self.networks, secs)
+        }
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        self.networks.collect(secs)
     }
 }
 
@@ -587,6 +595,58 @@ mod tests {
         for ((name, _), v) in kinds.iter().zip(&times) {
             println!("  {name}: {}", stats(v));
         }
+    }
+
+    /// The thread CPU time of one call of each network and storage read on this host, for
+    /// performance work. Thread CPU time leaves out waits on other processes. Run it with
+    /// `cargo test --release collector_cost -- --ignored --nocapture`.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "reads the real machine and prints timings"]
+    fn collector_cost() {
+        const CALLS: usize = 20;
+        fn thread_cpu() -> Duration {
+            let mut now = libc::timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            };
+            // SAFETY: `now` is a valid, writable `timespec` that lives for the call, and
+            // `CLOCK_THREAD_CPUTIME_ID` is a clock that macOS supports.
+            let status = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut now) };
+            assert_eq!(status, 0, "clock_gettime");
+            Duration::new(now.tv_sec as u64, now.tv_nsec as u32)
+        }
+        fn cost(name: &str, calls: usize, mut work: impl FnMut()) {
+            let mut times: Vec<f64> = (0..calls)
+                .map(|_| {
+                    thread::sleep(Duration::from_millis(20));
+                    let started = thread_cpu();
+                    work();
+                    (thread_cpu() - started).as_secs_f64() * 1_000.0
+                })
+                .collect();
+            crate::order::sort_by(&mut times, |a, b| a.total_cmp(b));
+            let mean = times.iter().sum::<f64>() / times.len().max(1) as f64;
+            let median = times.get(times.len() / 2).copied().unwrap_or(0.0);
+            println!("  {name}: mean {mean:.3} ms, median {median:.3} ms over {calls}");
+        }
+
+        let mut sampler = Sampler::new(Arc::new(AtomicU16::new(PanelSet::ALL.bits())));
+        sampler.storage.collect(1.0, true, true);
+        let storage = &mut sampler.storage;
+        println!("collector_cost (thread CPU time per call):");
+        cost("storage fast tick", CALLS, || {
+            storage.collect(0.25, false, false);
+        });
+        cost("storage re-list", CALLS, || {
+            storage.collect(0.25, true, false);
+        });
+        cost("storage space read", 5, || {
+            storage.collect(0.25, false, true);
+        });
+        cost("network", CALLS, || {
+            sampler.read_networks(0.25);
+        });
     }
 
     /// A sampler that reads nothing. It counts its kills and baseline samples.
