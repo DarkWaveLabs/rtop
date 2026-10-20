@@ -635,12 +635,26 @@ fn parse_procargs(buf: &[u8]) -> Option<(String, String)> {
     Some((file_name(exe), join_cmd(args)))
 }
 
-/// Pure. The size of the `KERN_PROCARGS2` buffer from `kern.argmax`.
+/// Pure. The size of the `KERN_PROCARGS2` buffer from `kern.argmax`: `argmax` plus the
+/// `int` of `argc`, the largest buffer the kernel takes (a larger one fails with `EINVAL`).
 fn args_buffer_len(arg_max: Option<usize>) -> usize {
     arg_max
         .filter(|&n| n > 0)
         .unwrap_or(ARG_MAX_FALLBACK)
         .min(ARG_MAX_CAP)
+        + size_of::<c_int>()
+}
+
+/// Pure. Parses one `KERN_PROCARGS2` read that wrote `size` bytes into `buf`. The exec
+/// path, padding and argv can together pass `kern.argmax` by up to a path length. The
+/// kernel then fills the buffer with the end of the area, which starts inside the exec
+/// path, so a read that fills the buffer is not parsed: the name then comes from
+/// `proc_pidpath`, and the command line stays empty.
+fn parse_args_read(buf: &[u8], size: usize) -> Option<(String, String)> {
+    if size >= buf.len() {
+        return None;
+    }
+    parse_procargs(&buf[..size])
 }
 
 /// Fills `pids` with all PIDs. False when the list cannot be read.
@@ -727,7 +741,7 @@ fn pid_info<T: PidInfo>(pid: pid_t) -> Result<T, Fail> {
 /// The real system calls, with buffers kept between calls.
 #[derive(Default)]
 struct Live {
-    /// `KERN_PROCARGS2` buffer of `kern.argmax` bytes, allocated on first use.
+    /// `KERN_PROCARGS2` buffer of `kern.argmax` + 4 bytes, allocated on first use.
     args: Vec<u8>,
     /// `proc_pidpath` buffer.
     path: Vec<u8>,
@@ -803,8 +817,7 @@ impl Kernel for Live {
         let mut size: libc::size_t = self.args.len();
         // SAFETY: `mib` is 3 ints. `self.args` is `size` bytes, writable, and lives until
         // the call returns; `sysctl` writes at most `size` bytes and stores the length it
-        // wrote in `size`. No new value is set (null, 0). A buffer of `kern.argmax` bytes
-        // holds any argument area, so the kernel copies it whole from its start.
+        // wrote in `size`. No new value is set (null, 0).
         let rc = unsafe {
             libc::sysctl(
                 mib.as_mut_ptr(),
@@ -818,7 +831,7 @@ impl Kernel for Live {
         if rc != 0 {
             return None;
         }
-        parse_procargs(self.args.get(..size)?)
+        parse_args_read(&self.args, size)
     }
 
     fn user_names(&mut self) -> HashMap<u32, Arc<str>> {
@@ -1177,10 +1190,24 @@ mod tests {
 
     #[test]
     fn args_buffer_len_rules() {
-        assert_eq!(args_buffer_len(Some(1 << 20)), 1 << 20);
-        assert_eq!(args_buffer_len(None), ARG_MAX_FALLBACK);
-        assert_eq!(args_buffer_len(Some(0)), ARG_MAX_FALLBACK);
-        assert_eq!(args_buffer_len(Some(1 << 30)), ARG_MAX_CAP);
+        assert_eq!(args_buffer_len(Some(1 << 20)), (1 << 20) + 4);
+        assert_eq!(args_buffer_len(None), ARG_MAX_FALLBACK + 4);
+        assert_eq!(args_buffer_len(Some(0)), ARG_MAX_FALLBACK + 4);
+        assert_eq!(args_buffer_len(Some(1 << 30)), ARG_MAX_CAP + 4);
+    }
+
+    #[test]
+    fn a_read_that_fills_the_buffer_is_not_parsed() {
+        let mut buf = procargs(2, b"/bin/sleep\0\0\0\0\0\0sleep\x0030\0");
+        let len = buf.len();
+        assert_eq!(
+            parse_args_read(&buf, len - 1),
+            Some(("sleep".into(), "sleep 30".into())),
+            "room to spare"
+        );
+        // A read that fills the buffer may be cut, whatever it holds.
+        buf.truncate(len - 1);
+        assert_eq!(parse_args_read(&buf, buf.len()), None, "may be cut");
     }
 
     #[test]
@@ -1717,6 +1744,53 @@ mod tests {
             "{cmds:?}"
         );
         assert_eq!(cmds, ["30", "-c read _"]);
+    }
+
+    /// An argument area larger than the buffer: a long exec path (a symlink to `sh`) and
+    /// the longest argument that `execve` takes. The kernel then copies the end of the
+    /// area, which starts inside the path, so a parse would show a piece of the path as
+    /// the name. The read is refused instead.
+    #[test]
+    fn cut_argument_area_is_not_parsed() {
+        use std::os::unix::process::CommandExt;
+        use std::process::{Command, Stdio};
+
+        let argmax = kern_argmax().expect("kern.argmax");
+        let mut name = format!("rtop-cut-read-{}-", std::process::id());
+        name.extend(std::iter::repeat_n('x', 200 - name.len()));
+        let link = std::env::temp_dir().join(name);
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink("/bin/sh", &link).unwrap();
+        // Shrink the argument until `execve` stops failing with `E2BIG`.
+        let mut big_len = argmax;
+        let mut child = None;
+        while child.is_none() && big_len > argmax - 4096 {
+            big_len -= 16;
+            child = Command::new(&link)
+                .arg0("sh")
+                .args(["-c", "read _", &"y".repeat(big_len)])
+                .env_clear()
+                .stdin(Stdio::piped())
+                .spawn()
+                .ok();
+        }
+        std::fs::remove_file(&link).unwrap();
+        let mut child = child.expect("spawned with a large argument");
+        let mut sys = System::new();
+        let procs = ProcCollector::new().collect(&mut sys, 1.0, true);
+        let p = row(&procs, child.id()).clone();
+        child.kill().unwrap();
+        child.wait().unwrap();
+
+        // The exec path with its padding, then argv. The kernel leaves out the
+        // environment of another process.
+        let path_len = link.as_os_str().len();
+        let area = path_len + 1 + path_padding(path_len) + b"sh\0-c\0read _\0".len() + big_len + 1;
+        assert!(
+            area > argmax,
+            "area {area} fits; the test needs a longer path"
+        );
+        assert_eq!((&*p.name, &*p.cmd), ("sh", ""), "name from proc_pidpath");
     }
 
     #[test]
