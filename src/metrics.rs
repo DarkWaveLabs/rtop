@@ -9,7 +9,7 @@
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -19,7 +19,7 @@ use sysinfo::{MINIMUM_CPU_UPDATE_INTERVAL, System};
 
 use crate::app::Event;
 use crate::net::{self, NetIface};
-use crate::process::{KillRequest, ProcCollector};
+use crate::process::{KillReport, KillRequest, ProcCollector};
 use crate::sensors::{SensorCollector, Sensors};
 use crate::storage::{Storage, StorageCollector};
 use crate::zfs::{ZfsArc, ZfsCollector};
@@ -78,13 +78,23 @@ pub struct Snapshot {
 /// command lines and macOS thread counts.
 const SLOW_PERIOD: Duration = Duration::from_secs(5);
 
+/// A message from the UI thread to the sampler.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Control {
+    Kill(KillRequest),
+    /// The interval changed: read it again now.
+    Wake,
+    /// Stop or start sampling. Kills still work while paused.
+    Pause(bool),
+}
+
 /// Starts the sampler thread. It stops by itself when the UI drops the receiver.
-/// It also sends the kill requests that come in on `kills`, and reports each one as
+/// It also sends the kill requests that come in on `control`, and reports each one as
 /// [`Event::KillDone`].
 pub fn spawn_sampler(
     tx: Sender<Event>,
     interval_ms: Arc<AtomicU64>,
-    kills: Receiver<KillRequest>,
+    control: Receiver<Control>,
 ) -> io::Result<()> {
     thread::Builder::new()
         .name("sampler".into())
@@ -97,10 +107,7 @@ pub fn spawn_sampler(
                 if tx.send(Event::Metrics(sampler.sample())).is_err() {
                     break;
                 }
-                if sampler
-                    .wait_until_due(&interval_ms, started, &kills, &tx)
-                    .is_err()
-                {
+                if wait_until_due(&mut sampler, &interval_ms, started, &control, &tx).is_err() {
                     break;
                 }
             }
@@ -204,30 +211,73 @@ impl Sampler {
             sensors,
         }
     }
+}
 
-    /// Sleeps in short steps until the next tick is due. It reads the interval again each
-    /// time, so a key press that changes the interval takes effect at once, and it sends
-    /// each kill request as it comes, so a kill starts within one step.
-    fn wait_until_due(
-        &mut self,
-        interval_ms: &AtomicU64,
-        started: Instant,
-        kills: &Receiver<KillRequest>,
-        tx: &Sender<Event>,
-    ) -> Result<(), Disconnected> {
-        const STEP: Duration = Duration::from_millis(50);
-        loop {
-            // A closed kill channel only means that no more kills come; sampling goes on.
-            while let Ok(req) = kills.try_recv() {
-                let report = self.procs.signal(&mut self.sys, &req, std::process::id());
-                tx.send(Event::KillDone(report)).map_err(|_| Disconnected)?;
-            }
-            let due = Duration::from_millis(interval_ms.load(Ordering::Relaxed));
+/// What the wait between ticks needs from the sampler. A trait, so the tests can count
+/// the calls without reading the machine.
+trait Tick {
+    /// Checks the target again and sends the signal.
+    fn kill(&mut self, req: &KillRequest) -> KillReport;
+    /// Takes one sample and drops it, so the next one has fresh baselines for its rates.
+    fn baseline(&mut self);
+}
+
+impl Tick for Sampler {
+    fn kill(&mut self, req: &KillRequest) -> KillReport {
+        self.procs.signal(&mut self.sys, req, std::process::id())
+    }
+
+    fn baseline(&mut self) {
+        self.sample();
+    }
+}
+
+/// Blocks until the next tick is due: one interval after `started`. It handles each
+/// control message as it comes. A kill is sent at once. `Wake` makes it read the interval
+/// again, so a key press that changes the interval takes effect at once. While paused it
+/// samples nothing; on resume it takes one baseline sample and the next tick is one
+/// interval after it. A closed control channel only means that no more messages come:
+/// it then sleeps until the tick is due, and sampling goes on.
+fn wait_until_due(
+    tick: &mut impl Tick,
+    interval_ms: &AtomicU64,
+    started: Instant,
+    control: &Receiver<Control>,
+    tx: &Sender<Event>,
+) -> Result<(), Disconnected> {
+    let mut started = started;
+    let mut paused = false;
+    loop {
+        let due = Duration::from_millis(interval_ms.load(Ordering::Relaxed));
+        let message = if paused {
+            control.recv().map_err(|_| RecvTimeoutError::Disconnected)
+        } else {
             let elapsed = started.elapsed();
             if elapsed >= due {
                 return Ok(());
             }
-            thread::sleep((due - elapsed).min(STEP));
+            control.recv_timeout(due - elapsed)
+        };
+        match message {
+            Ok(Control::Kill(req)) => {
+                let report = tick.kill(&req);
+                tx.send(Event::KillDone(report)).map_err(|_| Disconnected)?;
+            }
+            // The loop reads the interval again.
+            Ok(Control::Wake) | Err(RecvTimeoutError::Timeout) => {}
+            Ok(Control::Pause(pause)) => {
+                if paused && !pause {
+                    tick.baseline();
+                    started = Instant::now();
+                }
+                paused = pause;
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                if let Some(rest) = due.checked_sub(started.elapsed()) {
+                    thread::sleep(rest);
+                }
+                return Ok(());
+            }
         }
     }
 }
@@ -247,6 +297,9 @@ fn linux_mem_used(used: u64, zfs: Option<&ZfsArc>) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::process::{KillSignal, KillTarget};
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::mpsc;
 
     #[test]
     fn first_tick_is_slow_then_once_each_period() {
@@ -293,6 +346,165 @@ mod tests {
             stats(&fast),
             stats(&slow)
         );
+    }
+
+    /// A sampler that reads nothing. It counts its kills and baseline samples.
+    #[derive(Clone, Default)]
+    struct FakeTick {
+        kills: Arc<AtomicUsize>,
+        baselines: Arc<AtomicUsize>,
+    }
+
+    impl Tick for FakeTick {
+        fn kill(&mut self, req: &KillRequest) -> KillReport {
+            self.kills.fetch_add(1, Ordering::SeqCst);
+            KillReport {
+                request: req.clone(),
+                result: Ok(()),
+            }
+        }
+
+        fn baseline(&mut self) {
+            self.baselines.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn kill_request() -> KillRequest {
+        KillRequest {
+            target: KillTarget {
+                pid: 500,
+                ident: 1,
+                name: "sleep".into(),
+            },
+            signal: KillSignal::Term,
+        }
+    }
+
+    /// Runs `wait_until_due` on its own thread, as the sampler does.
+    fn spawn_wait(
+        tick: FakeTick,
+        interval_ms: u64,
+        control: Receiver<Control>,
+    ) -> (
+        Arc<AtomicU64>,
+        Receiver<Event>,
+        thread::JoinHandle<Duration>,
+    ) {
+        let interval = Arc::new(AtomicU64::new(interval_ms));
+        let (tx, rx) = mpsc::channel();
+        let shared = Arc::clone(&interval);
+        let handle = thread::spawn(move || {
+            let mut tick = tick;
+            let started = Instant::now();
+            assert!(
+                wait_until_due(&mut tick, &shared, started, &control, &tx).is_ok(),
+                "the UI is still there"
+            );
+            started.elapsed()
+        });
+        (interval, rx, handle)
+    }
+
+    fn kill_done(rx: &Receiver<Event>) -> bool {
+        matches!(
+            rx.recv_timeout(Duration::from_secs(2)),
+            Ok(Event::KillDone(_))
+        )
+    }
+
+    #[test]
+    fn a_kill_is_handled_at_once_and_wake_shortens_the_wait() {
+        let tick = FakeTick::default();
+        let (control, control_rx) = mpsc::channel();
+        let (interval, events, handle) = spawn_wait(tick.clone(), 10_000, control_rx);
+
+        let asked = Instant::now();
+        control.send(Control::Kill(kill_request())).unwrap();
+        assert!(kill_done(&events));
+        assert!(asked.elapsed() < Duration::from_secs(1), "not at the tick");
+        assert_eq!(tick.kills.load(Ordering::SeqCst), 1);
+
+        // As the UI does: store the interval first, then wake the sampler.
+        interval.store(10, Ordering::Relaxed);
+        control.send(Control::Wake).unwrap();
+        let waited = handle.join().unwrap();
+        assert!(waited < Duration::from_secs(2), "waited {waited:?}");
+        assert_eq!(tick.baselines.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn the_wait_lasts_one_interval_without_messages() {
+        let (_control, control_rx) = mpsc::channel();
+        let (_, _, handle) = spawn_wait(FakeTick::default(), 60, control_rx);
+        let waited = handle.join().unwrap();
+        assert!(waited >= Duration::from_millis(60), "waited {waited:?}");
+    }
+
+    #[test]
+    fn pause_stops_sampling_but_kills_still_work() {
+        let tick = FakeTick::default();
+        let (control, control_rx) = mpsc::channel();
+        control.send(Control::Pause(true)).unwrap();
+        let (_, events, handle) = spawn_wait(tick.clone(), 20, control_rx);
+
+        thread::sleep(Duration::from_millis(150));
+        assert!(!handle.is_finished(), "paused: no tick is due");
+
+        control.send(Control::Kill(kill_request())).unwrap();
+        assert!(kill_done(&events), "KillDone arrives while paused");
+        assert_eq!(tick.kills.load(Ordering::SeqCst), 1);
+        assert!(!handle.is_finished());
+        assert_eq!(tick.baselines.load(Ordering::SeqCst), 0);
+
+        let resumed = Instant::now();
+        control.send(Control::Pause(false)).unwrap();
+        handle.join().unwrap();
+        assert_eq!(
+            tick.baselines.load(Ordering::SeqCst),
+            1,
+            "one sample on resume, not sent"
+        );
+        assert!(
+            resumed.elapsed() >= Duration::from_millis(20),
+            "the next sample comes one interval after the baseline"
+        );
+    }
+
+    #[test]
+    fn a_closed_channel_falls_back_to_a_plain_sleep() {
+        let (control, control_rx) = mpsc::channel::<Control>();
+        drop(control);
+        let (_, _, handle) = spawn_wait(FakeTick::default(), 60, control_rx);
+        let waited = handle.join().unwrap();
+        assert!(waited >= Duration::from_millis(60), "waited {waited:?}");
+    }
+
+    #[test]
+    fn a_channel_that_closes_while_paused_lets_sampling_go_on() {
+        let (control, control_rx) = mpsc::channel();
+        control.send(Control::Pause(true)).unwrap();
+        let (_, _, handle) = spawn_wait(FakeTick::default(), 20, control_rx);
+        thread::sleep(Duration::from_millis(50));
+        drop(control);
+        let waited = handle.join().unwrap();
+        assert!(waited < Duration::from_secs(2), "waited {waited:?}");
+    }
+
+    #[test]
+    fn a_gone_ui_stops_the_wait() {
+        let (control, control_rx) = mpsc::channel();
+        let (tx, rx) = mpsc::channel();
+        drop(rx);
+        control.send(Control::Kill(kill_request())).unwrap();
+        let interval = AtomicU64::new(10_000);
+        let result = wait_until_due(
+            &mut FakeTick::default(),
+            &interval,
+            Instant::now(),
+            &control_rx,
+            &tx,
+        );
+        assert!(result.is_err());
     }
 
     #[test]

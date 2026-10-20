@@ -6,7 +6,7 @@
 //!  sampler thread ──Metrics, KillDone──┐
 //!                                      ├──► mpsc channel ──► UI thread (owns App, draws)
 //!  input thread ────Key, Paste, Resize─┘                         │
-//!  sampler thread ◄──────────── KillRequest ─────────────────────┘
+//!  sampler thread ◄──── Control (Kill, Wake, Pause) ──────────────┘
 //! ```
 
 mod app;
@@ -112,9 +112,9 @@ fn main() -> Result<()> {
 
     let interval_ms = Arc::new(AtomicU64::new(DEFAULT_INTERVAL_MS));
     let (tx, rx) = mpsc::channel();
-    let (kill_tx, kill_rx) = mpsc::channel();
-    let mut app =
-        App::new(metrics::HostInfo::detect(), Arc::clone(&interval_ms)).with_kill_sender(kill_tx);
+    let (control_tx, control_rx) = mpsc::channel();
+    let mut app = App::new(metrics::HostInfo::detect(), Arc::clone(&interval_ms))
+        .with_control_sender(control_tx);
     // Precedence: the command line, then the config file, then the built-in default.
     app.apply_config(&config);
     if let Some(ms) = cli.interval_ms {
@@ -123,7 +123,7 @@ fn main() -> Result<()> {
     if cli.tree {
         app.tree = true;
     }
-    metrics::spawn_sampler(tx.clone(), interval_ms, kill_rx).context("start sampler thread")?;
+    metrics::spawn_sampler(tx.clone(), interval_ms, control_rx).context("start sampler thread")?;
 
     // `ratatui::run` enters raw mode and the alternate screen, and it puts the
     // terminal back afterwards, even when the closure panics.

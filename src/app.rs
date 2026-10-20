@@ -11,7 +11,7 @@ use ratatui::widgets::TableState;
 
 use crate::config::Config;
 use crate::format;
-use crate::metrics::{HostInfo, Snapshot};
+use crate::metrics::{Control, HostInfo, Snapshot};
 use crate::panel::{PanelId, PanelSet};
 use crate::process::{self, KillReport, KillRequest, KillSignal, KillTarget, ProcRow, ProcView};
 
@@ -104,7 +104,8 @@ pub struct App {
     pub highlighted: Option<KillTarget>,
     /// True once a frame has shown the kill prompt. `ui::draw` sets it; `x` clears it.
     pub kill_prompt_drawn: bool,
-    kill_tx: Option<Sender<KillRequest>>,
+    /// To the sampler thread: kills, wake-ups and pause.
+    control_tx: Option<Sender<Control>>,
     interval_ms: Arc<AtomicU64>,
 }
 
@@ -132,15 +133,22 @@ impl App {
             status: None,
             highlighted: None,
             kill_prompt_drawn: false,
-            kill_tx: None,
+            control_tx: None,
             interval_ms,
         }
     }
 
     /// The channel to the sampler thread, which sends the signals.
-    pub fn with_kill_sender(mut self, tx: Sender<KillRequest>) -> Self {
-        self.kill_tx = Some(tx);
+    pub fn with_control_sender(mut self, tx: Sender<Control>) -> Self {
+        self.control_tx = Some(tx);
         self
+    }
+
+    /// Sends one message to the sampler. False when there is no sampler to take it.
+    fn send(&self, message: Control) -> bool {
+        self.control_tx
+            .as_ref()
+            .is_some_and(|tx| tx.send(message).is_ok())
     }
 
     /// Applies config values, then the caller applies CLI overrides.
@@ -286,7 +294,10 @@ impl App {
                     self.toggle_panel(id);
                 }
             }
-            KeyCode::Char(' ') => self.paused = !self.paused,
+            KeyCode::Char(' ') => {
+                self.paused = !self.paused;
+                self.send(Control::Pause(self.paused));
+            }
             KeyCode::Char('+' | '=') => self.scale_interval(2.0),
             KeyCode::Char('-') => self.scale_interval(0.5),
             KeyCode::Down | KeyCode::Char('j') => self.table.select_next(),
@@ -326,11 +337,7 @@ impl App {
             target.pid,
             target.name
         );
-        let request = KillRequest { target, signal };
-        let sent = self
-            .kill_tx
-            .as_ref()
-            .is_some_and(|tx| tx.send(request).is_ok());
+        let sent = self.send(Control::Kill(KillRequest { target, signal }));
         self.status = Some(if sent {
             message
         } else {
@@ -373,12 +380,14 @@ impl App {
         }
     }
 
+    /// Stores the new interval before it wakes the sampler, so the sampler reads the new value.
     fn scale_interval(&mut self, factor: f64) {
         let next = (self.interval_ms() as f64 * factor) as u64;
         self.interval_ms.store(
             next.clamp(MIN_INTERVAL_MS, MAX_INTERVAL_MS),
             Ordering::Relaxed,
         );
+        self.send(Control::Wake);
     }
 
     /// Processes that match the filter, in the current sort order, as the table shows them.
@@ -477,10 +486,15 @@ mod tests {
         }
     }
 
-    fn app_with_kill_channel(processes: Vec<ProcInfo>) -> (App, Receiver<KillRequest>) {
+    fn app_with_kill_channel(processes: Vec<ProcInfo>) -> (App, Receiver<Control>) {
         let (tx, rx) = mpsc::channel();
-        let app = app_with(processes).with_kill_sender(tx);
+        let app = app_with(processes).with_control_sender(tx);
         (app, rx)
+    }
+
+    /// True when no kill request is waiting in `rx`. Other messages are drained too.
+    fn no_kill(rx: &Receiver<Control>) -> bool {
+        rx.try_iter().all(|c| !matches!(c, Control::Kill(_)))
     }
 
     #[test]
@@ -563,6 +577,31 @@ mod tests {
             press(&mut app, KeyCode::Char('+'));
         }
         assert_eq!(app.interval_ms(), MAX_INTERVAL_MS);
+    }
+
+    #[test]
+    fn interval_keys_store_the_interval_then_wake_the_sampler() {
+        let (mut app, rx) = app_with_kill_channel(vec![]);
+        press(&mut app, KeyCode::Char('+'));
+        assert_eq!(app.interval_ms(), 2_000, "stored before the wake-up");
+        assert_eq!(rx.try_recv(), Ok(Control::Wake));
+        press(&mut app, KeyCode::Char('-'));
+        assert_eq!(app.interval_ms(), 1_000);
+        assert_eq!(rx.try_recv(), Ok(Control::Wake));
+        press(&mut app, KeyCode::Char('='));
+        assert_eq!(rx.try_recv(), Ok(Control::Wake), "= is + without shift");
+        assert!(rx.try_recv().is_err(), "one wake-up for each key");
+    }
+
+    #[test]
+    fn space_pauses_and_resumes_the_sampler() {
+        let (mut app, rx) = app_with_kill_channel(vec![]);
+        press(&mut app, KeyCode::Char(' '));
+        assert!(app.paused);
+        assert_eq!(rx.try_recv(), Ok(Control::Pause(true)));
+        press(&mut app, KeyCode::Char(' '));
+        assert!(!app.paused);
+        assert_eq!(rx.try_recv(), Ok(Control::Pause(false)));
     }
 
     #[test]
@@ -651,10 +690,10 @@ mod tests {
             press(&mut app, KeyCode::Char(key));
             assert_eq!(
                 rx.try_recv(),
-                Ok(KillRequest {
+                Ok(Control::Kill(KillRequest {
                     target: target(500, "sleep"),
                     signal
-                })
+                }))
             );
             assert_eq!(app.mode, Mode::Normal);
             assert_eq!(
@@ -753,7 +792,7 @@ mod tests {
         for c in " firefox".chars() {
             press(&mut app, KeyCode::Char(c));
         }
-        assert!(rx.try_recv().is_err(), "no signal");
+        assert!(no_kill(&rx), "no signal");
     }
 
     #[test]
