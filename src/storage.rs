@@ -203,7 +203,8 @@ impl StorageCollector {
     }
 
     /// Lists the disks again, without their I/O counters or space, then reads the space
-    /// of the disks that `space_reads` picks. Returns true when a disk came or went.
+    /// of the disks that `space_reads` picks. Returns true when a disk came or went, or
+    /// (macOS) when the mount → whole-disk map changed.
     fn relist(&mut self, all_space: bool) -> bool {
         self.disks
             .refresh_specifics(true, DiskRefreshKind::nothing());
@@ -241,8 +242,11 @@ impl StorageCollector {
         let now: HashSet<(String, String)> = keys.into_iter().collect();
         self.space.retain(|key, _| now.contains(key));
         self.listed = now;
+        // A mount that moved to another whole disk changes the drivers too.
         #[cfg(target_os = "macos")]
-        self.refresh_groups();
+        let changed = self.refresh_groups() || plan.changed;
+        #[cfg(not(target_os = "macos"))]
+        let changed = plan.changed;
         self.file_mounts = self
             .disks
             .list()
@@ -251,12 +255,12 @@ impl StorageCollector {
             .filter(|mount| is_file_mount(mount))
             .map(|mount| mount.to_string_lossy().into_owned())
             .collect();
-        plan.changed
+        changed
     }
 
     /// The usage of each disk in `raws` (the disk list, in order): read for the disks in
     /// `leaders`, zero for the others. `relisted` is set on a re-list tick: true when a
-    /// disk came or went. macOS reads the block storage driver of each whole disk; it
+    /// disk came or went, or the whole-disk map changed. macOS reads the block storage driver of each whole disk; it
     /// finds the drivers again on a re-list, and keeps them in between.
     #[cfg(target_os = "macos")]
     fn read_io(
@@ -314,10 +318,11 @@ impl StorageCollector {
         own
     }
 
-    /// Maps each kept mount to its whole disk, so the APFS volumes of one container share one counter.
+    /// Maps each kept mount to its whole disk, so the APFS volumes of one container share
+    /// one counter. Returns true when the map changed.
     #[cfg(target_os = "macos")]
-    fn refresh_groups(&mut self) {
-        self.groups = self
+    fn refresh_groups(&mut self) -> bool {
+        let groups: HashMap<String, String> = self
             .disks
             .list()
             .iter()
@@ -333,6 +338,9 @@ impl StorageCollector {
                 Some((mount_text.into_owned(), whole.to_owned()))
             })
             .collect();
+        let changed = groups != self.groups;
+        self.groups = groups;
+        changed
     }
 }
 
@@ -662,11 +670,12 @@ fn advance_counter(last: &mut Option<(u64, u64)>, now: Option<(u64, u64)>) -> Di
     usage
 }
 
-/// Pure. True when a group's driver must be looked up: it has none (`failed` is `None`),
-/// its last read failed, or the disk list changed (`recheck`).
+/// Pure. True when a group's driver must be looked up: it has none (`held` is `None`),
+/// its last read failed, it is no longer registered (its disk went), or the disk list
+/// changed (`recheck`). `held` is (last read failed, still registered) for a held driver.
 #[cfg(any(test, target_os = "macos"))]
-fn needs_lookup(failed: Option<bool>, recheck: bool) -> bool {
-    recheck || failed.unwrap_or(true)
+fn needs_lookup(held: Option<(bool, bool)>, recheck: bool) -> bool {
+    recheck || held.is_none_or(|(failed, registered)| failed || !registered)
 }
 
 /// macOS disk I/O counters and disk space, read through IOKit and CoreFoundation.
@@ -690,7 +699,7 @@ mod apple {
     };
     use objc2_io_kit::{
         IOBSDNameMatching, IOObjectConformsTo, IOObjectRelease, IORegistryEntryCreateCFProperty,
-        IORegistryEntryGetParentEntry, IORegistryEntryGetRegistryEntryID,
+        IORegistryEntryGetParentEntry, IORegistryEntryGetRegistryEntryID, IORegistryEntryInPlane,
         IOServiceGetMatchingService, io_registry_entry_t, kIOServicePlane,
     };
     use sysinfo::DiskUsage;
@@ -731,6 +740,15 @@ mod apple {
             // `id` is a valid, writable `u64` for the call.
             let status = unsafe { IORegistryEntryGetRegistryEntryID(self.0, &mut id) };
             (status == libc::KERN_SUCCESS).then_some(id)
+        }
+
+        /// True while the entry is attached in the service plane. A driver whose disk
+        /// went is detached, though the reference held here keeps the object alive.
+        fn registered(&self) -> bool {
+            let mut plane = io_name(&kIOServicePlane.to_string_lossy());
+            // SAFETY: `self.0` is a live object that this value holds a reference on, and
+            // `plane` is a NUL-terminated name in the 128-byte array the call reads.
+            unsafe { IORegistryEntryInPlane(self.0, &mut plane) }
         }
 
         fn is_driver(&self) -> bool {
@@ -828,15 +846,19 @@ mod apple {
 
     impl Drivers {
         /// Keeps a driver for each of `groups` and releases the others. A group without a
-        /// driver, or whose last read failed, looks it up. With `recheck` (the disk list
-        /// changed), every group looks it up again, and keeps its counters only when it
-        /// finds the same driver: a new disk can take the BSD name of one that went.
+        /// driver, whose last read failed, or whose driver is no longer registered, looks
+        /// it up. With `recheck` (the disk list or the whole-disk map changed), every group
+        /// looks it up again. A group keeps its counters only when it finds the same
+        /// driver: a new disk can take the BSD name of one that went.
         pub(super) fn sync(&mut self, groups: &[&str], recheck: bool) {
             self.by_group
                 .retain(|group, _| groups.contains(&group.as_str()));
             for &group in groups {
-                let failed = self.by_group.get(group).map(|driver| driver.failed);
-                if !needs_lookup(failed, recheck) {
+                let held = self
+                    .by_group
+                    .get(group)
+                    .map(|driver| (driver.failed, driver.object.registered()));
+                if !needs_lookup(held, recheck) {
                     continue;
                 }
                 let Some(object) = find_driver(group) else {
@@ -860,6 +882,18 @@ mod apple {
                     }
                 }
             }
+        }
+
+        /// The number of drivers held, and how many of them are registered.
+        #[cfg(test)]
+        pub(super) fn registered(&self) -> (usize, usize) {
+            let held = self.by_group.len();
+            let live = self
+                .by_group
+                .values()
+                .filter(|driver| driver.object.registered())
+                .count();
+            (held, live)
         }
 
         /// Reads the counters of `group` and returns the usage since the last read. A group
@@ -1442,11 +1476,22 @@ mod tests {
     }
 
     #[test]
-    fn a_driver_is_looked_up_when_missing_failed_or_the_list_changed() {
+    fn a_driver_is_looked_up_when_missing_failed_gone_or_the_list_changed() {
+        // A held driver is (last read failed, still registered).
         assert!(needs_lookup(None, false), "no driver yet");
-        assert!(needs_lookup(Some(true), false), "the last read failed");
-        assert!(!needs_lookup(Some(false), false));
-        assert!(needs_lookup(Some(false), true), "the disk list changed");
+        assert!(
+            needs_lookup(Some((true, true)), false),
+            "the last read failed"
+        );
+        assert!(!needs_lookup(Some((false, true)), false));
+        assert!(
+            needs_lookup(Some((false, true)), true),
+            "the disk list changed"
+        );
+        assert!(
+            needs_lookup(Some((false, false)), false),
+            "the disk went: another can take its BSD name, volume name and mount"
+        );
     }
 
     #[cfg(target_os = "macos")]
@@ -1517,6 +1562,9 @@ mod tests {
         groups.dedup();
         let mut drivers = apple::Drivers::default();
         drivers.sync(&groups, true);
+        let (held, live) = drivers.registered();
+        assert_eq!(held, groups.len(), "a driver for each disk");
+        assert_eq!(live, held, "a held driver of a present disk is registered");
         let totals = |drivers: &mut apple::Drivers, group| {
             let usage = drivers.usage(group);
             (usage.total_read_bytes, usage.total_written_bytes)
