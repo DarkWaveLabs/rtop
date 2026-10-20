@@ -1793,6 +1793,50 @@ mod tests {
         assert_eq!((&*p.name, &*p.cmd), ("sh", ""), "name from proc_pidpath");
     }
 
+    /// A readable process is identified again only when its start time changes, so the
+    /// kill check relies on `exec` keeping `p_uniqueid` (and the start time).
+    #[test]
+    fn exec_keeps_the_identity() {
+        use std::io::Write as _;
+        use std::process::{Command, Stdio};
+        use std::time::Duration;
+
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "read _; exec /bin/sleep 30"])
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        let mut sys = System::new();
+        let mut collector = ProcCollector::new();
+        let before = row(&collector.collect(&mut sys, 1.0, true), pid).ident;
+        child.stdin.take().unwrap().write_all(b"go\n").unwrap();
+        let mut live = Live::default();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let raw_pid = pid_t::try_from(pid).unwrap();
+        while live.path_name(raw_pid).as_deref() != Some("sleep") && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let execed = live.path_name(raw_pid);
+        let after = row(&collector.collect(&mut sys, 1.0, false), pid).ident;
+        let request = KillRequest {
+            target: KillTarget {
+                pid,
+                ident: after,
+                name: "sleep".into(),
+            },
+            signal: KillSignal::Term,
+        };
+        let result = collector
+            .signal(&mut sys, &request, std::process::id())
+            .result;
+        let _ = child.kill();
+        child.wait().unwrap();
+        assert_eq!(execed.as_deref(), Some("sleep"), "the shell ran exec");
+        assert_eq!(after, before, "the row keeps its identity");
+        assert_eq!(result, Ok(()), "the kill check matches after exec");
+    }
+
     #[test]
     fn signal_kills_a_child_and_checks_its_identity() {
         use std::process::Command;
