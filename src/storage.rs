@@ -908,6 +908,8 @@ mod apple {
         }
     }
 
+    // SAFETY: the Objective-C runtime's autorelease pool functions, with the C signatures
+    // of `objc/objc-internal.h`. libobjc is loaded in every macOS process.
     #[link(name = "objc", kind = "dylib")]
     unsafe extern "C" {
         fn objc_autoreleasePoolPush() -> *mut c_void;
