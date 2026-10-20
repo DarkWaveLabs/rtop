@@ -1,4 +1,5 @@
-//! Filesystem usage and disk I/O rates from `sysinfo::Disks`.
+//! Filesystem usage and disk I/O rates. The disk list comes from `sysinfo::Disks`; on
+//! macOS the I/O counters and the space are read here (see `apple`).
 
 use std::collections::{HashMap, HashSet};
 
@@ -6,9 +7,9 @@ use sysinfo::{DiskRefreshKind, DiskUsage, Disks};
 
 /// Every disk of one I/O group reads the same counter: on Linux each mount of one device,
 /// on macOS each APFS volume of one whole disk. Linux re-reads and parses all of
-/// /proc/diskstats for each `Disk::refresh_specifics`, and macOS walks the IOKit registry.
-/// So a tick refreshes one disk for each group and gives its usage to the other disks of
-/// the group. Elsewhere each disk refreshes itself.
+/// /proc/diskstats for each `Disk::refresh_specifics`, and macOS reads one IOKit property.
+/// So a tick reads the counter of one disk for each group and gives its usage to the other
+/// disks of the group. Elsewhere each disk refreshes itself.
 const ONE_REFRESH_PER_GROUP: bool = cfg!(any(target_os = "linux", target_os = "macos"));
 
 /// File systems with no real storage behind them.
@@ -55,11 +56,21 @@ pub struct StorageCollector {
     /// (device, mount) of each disk in the last list. A disk that is not here is new, and
     /// has no space values until it is read.
     listed: HashSet<(String, String)>,
+    /// (total, available) bytes by (device, mount). Read only for disks that `keep_mount`
+    /// keeps: on the space read and for disks new in a list. A disk without an entry has
+    /// total 0, so `keep_volume` drops it.
+    space: HashMap<(String, String), (u64, u64)>,
     /// mount → io_group. Filled on re-lists on macOS only; empty elsewhere.
     groups: HashMap<String, String>,
     /// Mount points that are regular files, such as the /etc/hosts that Docker bind-mounts.
     /// Filled on re-lists.
     file_mounts: HashSet<String>,
+    /// The block storage driver of each whole disk, found once and read on each call.
+    #[cfg(target_os = "macos")]
+    drivers: apple::Drivers,
+    /// (device, mount) of the disks whose I/O counters the last call read.
+    #[cfg(not(target_os = "macos"))]
+    io_read: HashSet<(String, String)>,
 }
 
 impl StorageCollector {
@@ -69,52 +80,22 @@ impl StorageCollector {
             disks: Disks::new(),
             seen: HashSet::new(),
             listed: HashSet::new(),
+            space: HashMap::new(),
             groups: HashMap::new(),
             file_mounts: HashSet::new(),
+            #[cfg(target_os = "macos")]
+            drivers: apple::Drivers::default(),
+            #[cfg(not(target_os = "macos"))]
+            io_read: HashSet::new(),
         }
     }
 
-    /// The I/O counters refresh on every call. With `slow`, the disk list refreshes too,
-    /// and only disks that are new since the last list read their space. With `space`, the
-    /// list refreshes and every disk reads its space.
+    /// The I/O counters of one disk for each I/O group refresh on every call. With `slow`,
+    /// the disk list refreshes too, and only disks that are new since the last list read
+    /// their space. With `space`, the list refreshes and every disk that `keep_mount`
+    /// keeps reads its space.
     pub fn collect(&mut self, secs: f64, slow: bool, space: bool) -> Storage {
-        let relist = slow || space;
-        if relist {
-            // A re-list also reads the I/O counters, so the fast loop below is not needed.
-            let kind = DiskRefreshKind::nothing().with_io_usage();
-            let kind = if space { kind.with_storage() } else { kind };
-            self.disks.refresh_specifics(true, kind);
-            let keys: Vec<(String, String)> = self
-                .disks
-                .list()
-                .iter()
-                .map(|disk| {
-                    (
-                        disk.name().to_string_lossy().into_owned(),
-                        disk.mount_point().to_string_lossy().into_owned(),
-                    )
-                })
-                .collect();
-            if !space {
-                // A new disk has total 0 until its space is read, and `keep_volume` would drop it.
-                for i in new_disks(&self.listed, &keys) {
-                    if let Some(disk) = self.disks.list_mut().get_mut(i) {
-                        disk.refresh_specifics(DiskRefreshKind::nothing().with_storage());
-                    }
-                }
-            }
-            self.listed = keys.into_iter().collect();
-            #[cfg(target_os = "macos")]
-            self.refresh_groups();
-            self.file_mounts = self
-                .disks
-                .list()
-                .iter()
-                .map(|disk| disk.mount_point())
-                .filter(|mount| is_file_mount(mount))
-                .map(|mount| mount.to_string_lossy().into_owned())
-                .collect();
-        }
+        let relisted = (slow || space).then(|| self.relist(space));
         let mut raws: Vec<RawVolume> = self
             .disks
             .list()
@@ -122,6 +103,9 @@ impl StorageCollector {
             .map(|disk| {
                 let mount = disk.mount_point().to_string_lossy().into_owned();
                 let device = disk.name().to_string_lossy().into_owned();
+                let key = (device, mount);
+                let (total, available) = self.space.get(&key).copied().unwrap_or_default();
+                let (device, mount) = key;
                 RawVolume {
                     io_group: self
                         .groups
@@ -131,8 +115,8 @@ impl StorageCollector {
                     mount,
                     device,
                     file_system: disk.file_system().to_string_lossy().into_owned(),
-                    total: disk.total_space(),
-                    available: disk.available_space(),
+                    total,
+                    available,
                     usage: DiskUsage::default(),
                 }
             })
@@ -149,16 +133,8 @@ impl StorageCollector {
             })
             .collect();
         let io_disks = io_refresh_set(&items, ONE_REFRESH_PER_GROUP);
-        if !relist {
-            for &i in &io_disks {
-                if let Some(disk) = self.disks.list_mut().get_mut(i) {
-                    disk.refresh_specifics(DiskRefreshKind::nothing().with_io_usage());
-                }
-            }
-        }
-        let own: Vec<DiskUsage> = self.disks.list().iter().map(|disk| disk.usage()).collect();
-        // Also on re-list ticks: the other disks' own deltas there span the time since the
-        // last re-list, not `secs`.
+        let own = self.read_io(&raws, &io_disks, relisted);
+        // The other disks of a group never read their own counters.
         let usages = if ONE_REFRESH_PER_GROUP {
             let groups: Vec<&str> = raws.iter().map(|r| r.io_group.as_str()).collect();
             shared_usage(&groups, &own, &io_disks)
@@ -226,6 +202,119 @@ impl StorageCollector {
         }
     }
 
+    /// Lists the disks again, without their I/O counters or space, then reads the space
+    /// of the disks that `space_reads` picks. Returns true when a disk came or went.
+    fn relist(&mut self, all_space: bool) -> bool {
+        self.disks
+            .refresh_specifics(true, DiskRefreshKind::nothing());
+        let keys: Vec<(String, String)> = self
+            .disks
+            .list()
+            .iter()
+            .map(|disk| {
+                (
+                    disk.name().to_string_lossy().into_owned(),
+                    disk.mount_point().to_string_lossy().into_owned(),
+                )
+            })
+            .collect();
+        let file_systems: Vec<String> = self
+            .disks
+            .list()
+            .iter()
+            .map(|disk| disk.file_system().to_string_lossy().into_owned())
+            .collect();
+        let new = new_disks(&self.listed, &keys);
+        let mounts: Vec<(&str, &str)> = keys
+            .iter()
+            .zip(&file_systems)
+            .map(|((_, mount), fs)| (mount.as_str(), fs.as_str()))
+            .collect();
+        for i in space_reads(&mounts, &new, all_space) {
+            if let (Some(disk), Some(key)) = (self.disks.list_mut().get_mut(i), keys.get(i)) {
+                let read = read_space(disk);
+                if let Some(space) = merge_space(self.space.get(key).copied(), read) {
+                    self.space.insert(key.clone(), space);
+                }
+            }
+        }
+        let now: HashSet<(String, String)> = keys.into_iter().collect();
+        let changed = !new.is_empty() || self.listed.iter().any(|key| !now.contains(key));
+        self.space.retain(|key, _| now.contains(key));
+        self.listed = now;
+        #[cfg(target_os = "macos")]
+        self.refresh_groups();
+        self.file_mounts = self
+            .disks
+            .list()
+            .iter()
+            .map(|disk| disk.mount_point())
+            .filter(|mount| is_file_mount(mount))
+            .map(|mount| mount.to_string_lossy().into_owned())
+            .collect();
+        changed
+    }
+
+    /// The usage of each disk in `raws` (the disk list, in order): read for the disks in
+    /// `leaders`, zero for the others. `relisted` is set on a re-list tick: true when a
+    /// disk came or went. macOS reads the block storage driver of each whole disk; it
+    /// finds the drivers again on a re-list, and keeps them in between.
+    #[cfg(target_os = "macos")]
+    fn read_io(
+        &mut self,
+        raws: &[RawVolume],
+        leaders: &[usize],
+        relisted: Option<bool>,
+    ) -> Vec<DiskUsage> {
+        let groups: Vec<&str> = leaders
+            .iter()
+            .filter_map(|&i| raws.get(i))
+            .map(|raw| raw.io_group.as_str())
+            .collect();
+        if let Some(changed) = relisted {
+            // Only a whole-disk name can be looked up; a group named after its volume
+            // has no counter, as with sysinfo.
+            let whole: HashSet<&str> = self.groups.values().map(String::as_str).collect();
+            let disks: Vec<&str> = groups
+                .iter()
+                .copied()
+                .filter(|group| whole.contains(group))
+                .collect();
+            self.drivers.sync(&disks, changed);
+        }
+        let mut own = vec![DiskUsage::default(); raws.len()];
+        for (&i, group) in leaders.iter().zip(groups) {
+            if let Some(usage) = own.get_mut(i) {
+                *usage = self.drivers.usage(group);
+            }
+        }
+        own
+    }
+
+    /// The usage of each disk in `raws` (the disk list, in order), after the disks in
+    /// `leaders` read their counters. A leader whose counter the last call did not read
+    /// moves no bytes: its delta does not span this interval.
+    #[cfg(not(target_os = "macos"))]
+    fn read_io(
+        &mut self,
+        raws: &[RawVolume],
+        leaders: &[usize],
+        _relisted: Option<bool>,
+    ) -> Vec<DiskUsage> {
+        for &i in leaders {
+            if let Some(disk) = self.disks.list_mut().get_mut(i) {
+                disk.refresh_specifics(DiskRefreshKind::nothing().with_io_usage());
+            }
+        }
+        let mut own: Vec<DiskUsage> = self.disks.list().iter().map(|disk| disk.usage()).collect();
+        let keys: Vec<(String, String)> = raws
+            .iter()
+            .map(|raw| (raw.device.clone(), raw.mount.clone()))
+            .collect();
+        self.io_read = fresh_deltas(&mut own, &keys, leaders, &self.io_read);
+        own
+    }
+
     /// Maps each kept mount to its whole disk, so the APFS volumes of one container share one counter.
     #[cfg(target_os = "macos")]
     fn refresh_groups(&mut self) {
@@ -237,7 +326,7 @@ impl StorageCollector {
                 let mount = disk.mount_point();
                 let mount_text = mount.to_string_lossy();
                 let fs = disk.file_system().to_string_lossy();
-                if !keep_volume(&mount_text, &fs, disk.total_space()) {
+                if !keep_mount(&mount_text, &fs) {
                     return None;
                 }
                 let from = mount_source(mount)?;
@@ -246,6 +335,77 @@ impl StorageCollector {
             })
             .collect();
     }
+}
+
+/// The (total, available) space of a disk; `None` for a value that could not be read.
+/// macOS reads it itself: sysinfo's `Disk::refresh_specifics` asks the volume URL it made
+/// when it listed the disk, and CoreFoundation caches resource values in a URL, so a
+/// second read gives the first value again.
+#[cfg(target_os = "macos")]
+fn read_space(disk: &mut sysinfo::Disk) -> (Option<u64>, Option<u64>) {
+    apple::volume_space(disk.mount_point())
+}
+
+/// The (total, available) space of a disk. sysinfo keeps the last value when a read fails.
+#[cfg(not(target_os = "macos"))]
+fn read_space(disk: &mut sysinfo::Disk) -> (Option<u64>, Option<u64>) {
+    disk.refresh_specifics(DiskRefreshKind::nothing().with_storage());
+    (Some(disk.total_space()), Some(disk.available_space()))
+}
+
+/// Pure. The space of a disk after a read: each value that could not be read keeps its
+/// last value (0 when there is none), as in sysinfo. `None` when nothing is known.
+fn merge_space(
+    last: Option<(u64, u64)>,
+    (total, available): (Option<u64>, Option<u64>),
+) -> Option<(u64, u64)> {
+    if total.is_none() && available.is_none() {
+        return last;
+    }
+    let (last_total, last_available) = last.unwrap_or_default();
+    Some((
+        total.unwrap_or(last_total),
+        available.unwrap_or(last_available),
+    ))
+}
+
+/// Pure. Indices of the disks whose space a re-list reads: those that `keep_mount` keeps,
+/// all of them with `all`, else only the `new` ones. Items are (mount, file_system).
+fn space_reads(items: &[(&str, &str)], new: &[usize], all: bool) -> Vec<usize> {
+    let wanted = |i: &usize| {
+        items
+            .get(*i)
+            .is_some_and(|(mount, fs)| keep_mount(mount, fs))
+    };
+    if all {
+        (0..items.len()).filter(wanted).collect()
+    } else {
+        new.iter().copied().filter(wanted).collect()
+    }
+}
+
+/// Pure. Zeroes the deltas in `own` of the `leaders` whose key is not in `last` (the keys
+/// read on the last call), and returns the keys of the leaders, read now. `own` and
+/// `keys` have one entry for each disk.
+#[cfg(any(test, not(target_os = "macos")))]
+fn fresh_deltas(
+    own: &mut [DiskUsage],
+    keys: &[(String, String)],
+    leaders: &[usize],
+    last: &HashSet<(String, String)>,
+) -> HashSet<(String, String)> {
+    let mut read = HashSet::new();
+    for &i in leaders {
+        let (Some(key), Some(usage)) = (keys.get(i), own.get_mut(i)) else {
+            continue;
+        };
+        if !last.contains(key) {
+            usage.read_bytes = 0;
+            usage.written_bytes = 0;
+        }
+        read.insert(key.clone());
+    }
+    read
 }
 
 /// One disk from `sysinfo`, read once per call.
@@ -294,9 +454,15 @@ fn is_file_mount(mount: &std::path::Path) -> bool {
     std::fs::metadata(mount).is_ok_and(|meta| meta.is_file())
 }
 
-/// Pure filter. Drops pseudo and system volumes.
+/// Pure filter. Drops pseudo and system volumes, and volumes of unknown size.
 pub fn keep_volume(mount: &str, file_system: &str, total: u64) -> bool {
-    if total == 0 || PSEUDO_FILE_SYSTEMS.contains(&file_system) {
+    total > 0 && keep_mount(mount, file_system)
+}
+
+/// Pure. `keep_volume` before the size is known: true when the mount and the file
+/// system are worth a space read.
+fn keep_mount(mount: &str, file_system: &str) -> bool {
+    if PSEUDO_FILE_SYSTEMS.contains(&file_system) {
         return false;
     }
     if mount.starts_with("/System/Volumes/") && mount != "/System/Volumes/Data" {
@@ -428,6 +594,302 @@ fn sort_volumes(volumes: &mut [Volume]) {
     crate::order::sort_by(volumes, |a, b| {
         (a.mount != "/", &a.mount).cmp(&(b.mount != "/", &b.mount))
     });
+}
+
+/// Pure. The usage of a counter from its (read, written) totals at the last read and now.
+/// The first read moves no bytes, as a first sample has rate 0 anyway. A failed read
+/// (`now` is `None`) keeps the last totals and moves no bytes.
+#[cfg(any(test, target_os = "macos"))]
+fn counter_usage(last: Option<(u64, u64)>, now: Option<(u64, u64)>) -> DiskUsage {
+    let Some((read, written)) = now.or(last) else {
+        return DiskUsage::default();
+    };
+    let (last_read, last_written) = match (last, now) {
+        (Some(last), Some(_)) => last,
+        _ => (read, written),
+    };
+    DiskUsage {
+        read_bytes: read.saturating_sub(last_read),
+        written_bytes: written.saturating_sub(last_written),
+        total_read_bytes: read,
+        total_written_bytes: written,
+    }
+}
+
+/// Pure. True when a group's driver must be looked up: it has none (`failed` is `None`),
+/// its last read failed, or the disk list changed (`recheck`).
+#[cfg(any(test, target_os = "macos"))]
+fn needs_lookup(failed: Option<bool>, recheck: bool) -> bool {
+    recheck || failed.unwrap_or(true)
+}
+
+/// macOS disk I/O counters and disk space, read through IOKit and CoreFoundation.
+///
+/// sysinfo finds the I/O counters of a disk on each refresh: it matches the BSD name in
+/// the IOKit registry and walks up to the `IOBlockStorageDriver`, which cost about 2.2 ms
+/// of CPU per tick for one whole disk on the reference Mac. Here the driver of each whole
+/// disk is found once, when the disk list changes, kept, and each tick reads only its
+/// `Statistics` property, with the keys sysinfo reads.
+#[cfg(target_os = "macos")]
+mod apple {
+    use std::collections::HashMap;
+    use std::ffi::{CString, c_char, c_void};
+    use std::path::Path;
+    use std::ptr;
+
+    use objc2_core_foundation::{
+        CFArray, CFDictionary, CFNumber, CFRetained, CFString, CFType, CFURL,
+        kCFURLVolumeAvailableCapacityForImportantUsageKey, kCFURLVolumeAvailableCapacityKey,
+        kCFURLVolumeTotalCapacityKey,
+    };
+    use objc2_io_kit::{
+        IOBSDNameMatching, IOObjectConformsTo, IOObjectRelease, IORegistryEntryCreateCFProperty,
+        IORegistryEntryGetParentEntry, IORegistryEntryGetRegistryEntryID,
+        IOServiceGetMatchingService, io_registry_entry_t, kIOServicePlane,
+    };
+    use sysinfo::DiskUsage;
+
+    use super::{counter_usage, needs_lookup};
+
+    /// `MACH_PORT_NULL`: IOKit then uses its default main port.
+    const DEFAULT_PORT: libc::mach_port_t = 0;
+    const DRIVER_CLASS: &str = "IOBlockStorageDriver";
+    /// The driver property with the counters, and the counters in it.
+    const STATISTICS: &str = "Statistics";
+    const BYTES_READ: &str = "Bytes (Read)";
+    const BYTES_WRITTEN: &str = "Bytes (Write)";
+
+    /// An `io_name_t`: a NUL-terminated name in a 128-byte array, the size the IOKit
+    /// calls take.
+    fn io_name(name: &str) -> [c_char; 128] {
+        let mut out = [0; 128];
+        for (slot, byte) in out.iter_mut().zip(name.bytes().take(127)) {
+            *slot = byte as c_char;
+        }
+        out
+    }
+
+    /// One IOKit object that this code holds one reference on. Drop releases it, once.
+    struct Object(io_registry_entry_t);
+
+    impl Object {
+        /// Takes over a +1 reference from IOKit. `None` for the null object.
+        fn new(raw: io_registry_entry_t) -> Option<Self> {
+            (raw != 0).then_some(Self(raw))
+        }
+
+        /// The registry entry ID, which is unique for the life of the system.
+        fn id(&self) -> Option<u64> {
+            let mut id = 0;
+            // SAFETY: `self.0` is a live object that this value holds a reference on, and
+            // `id` is a valid, writable `u64` for the call.
+            let status = unsafe { IORegistryEntryGetRegistryEntryID(self.0, &mut id) };
+            (status == libc::KERN_SUCCESS).then_some(id)
+        }
+
+        fn is_driver(&self) -> bool {
+            let mut class = io_name(DRIVER_CLASS);
+            // SAFETY: `self.0` is a live object that this value holds a reference on, and
+            // `class` is a NUL-terminated name in the 128-byte array the call reads.
+            unsafe { IOObjectConformsTo(self.0, &mut class) }
+        }
+
+        /// The (read, written) byte counters of a block storage driver.
+        fn statistics(&self) -> Option<(u64, u64)> {
+            let key = CFString::from_static_str(STATISTICS);
+            // SAFETY: `self.0` is a live object that this value holds a reference on, and
+            // `key` is a CFString. A null allocator is the default one. The result is a
+            // copy (+1) that `CFRetained` owns and releases once.
+            let value = unsafe { IORegistryEntryCreateCFProperty(self.0, Some(&key), None, 0) }?;
+            let stats = value.downcast::<CFDictionary>().ok()?;
+            statistics_bytes(&stats)
+        }
+    }
+
+    impl Drop for Object {
+        fn drop(&mut self) {
+            IOObjectRelease(self.0);
+        }
+    }
+
+    /// The block storage driver of the whole disk `bsd_name` (such as `disk3`): the first
+    /// parent in the service plane that is an `IOBlockStorageDriver` and has the byte
+    /// counters, as sysinfo looks for it.
+    fn find_driver(bsd_name: &str) -> Option<Object> {
+        let name = CString::new(bsd_name).ok()?;
+        // SAFETY: `name` is a NUL-terminated C string that lives for the call. The result
+        // is a new dictionary (+1) that `CFRetained` owns.
+        let matching = unsafe { IOBSDNameMatching(DEFAULT_PORT, 0, name.as_ptr()) }?;
+        // The call consumes one reference: this one is a new +1 retain of the dictionary,
+        // and `matching` releases the first when it drops.
+        let matching = CFRetained::<CFDictionary>::from(&*matching);
+        // SAFETY: `matching` is a matching dictionary, given by value as the call
+        // consumes it. The returned service is +1, or 0 for none; `Object` owns it.
+        let mut entry =
+            Object::new(unsafe { IOServiceGetMatchingService(DEFAULT_PORT, Some(matching)) })?;
+        let mut plane = io_name(&kIOServicePlane.to_string_lossy());
+        loop {
+            let mut parent = 0;
+            // SAFETY: `entry.0` is a live object that `entry` holds a reference on,
+            // `plane` is a NUL-terminated name in the 128-byte array the call reads, and
+            // `parent` is a valid, writable `io_registry_entry_t`. On success the parent is
+            // +1 and `Object` owns it.
+            let status = unsafe { IORegistryEntryGetParentEntry(entry.0, &mut plane, &mut parent) };
+            if status != libc::KERN_SUCCESS {
+                return None;
+            }
+            // The child is released here, when `entry` takes the parent.
+            entry = Object::new(parent)?;
+            if entry.is_driver() && entry.statistics().is_some() {
+                return Some(entry);
+            }
+        }
+    }
+
+    /// Pure over its input. The (read, written) byte counters in a driver's `Statistics`
+    /// dictionary, or `None` when one is missing or not a number.
+    pub(super) fn statistics_bytes(stats: &CFDictionary) -> Option<(u64, u64)> {
+        let read = CFString::from_static_str(BYTES_READ);
+        let written = CFString::from_static_str(BYTES_WRITTEN);
+        Some((number(stats, &read)?, number(stats, &written)?))
+    }
+
+    /// The value of `key` in a dictionary with string keys, as sysinfo reads it: a CFNumber
+    /// as `i64`, cast to `u64`.
+    fn number(dict: &CFDictionary, key: &CFString) -> Option<u64> {
+        // SAFETY: IOKit and CFURL property dictionaries have CFString keys and CF object
+        // values, so viewing it with those types reads it as it is. The value is checked
+        // with `downcast` before it is used.
+        let dict = unsafe { dict.cast_unchecked::<CFString, CFType>() };
+        let value = dict.get(key)?;
+        Some(value.downcast::<CFNumber>().ok()?.as_i64()? as u64)
+    }
+
+    /// A kept driver and the counters it gave last.
+    struct Driver {
+        object: Object,
+        id: Option<u64>,
+        last: Option<(u64, u64)>,
+        failed: bool,
+    }
+
+    /// The driver of each whole disk that leads an I/O group, by group (BSD name).
+    /// Dropping it releases every driver.
+    #[derive(Default)]
+    pub(super) struct Drivers {
+        by_group: HashMap<String, Driver>,
+    }
+
+    impl Drivers {
+        /// Keeps a driver for each of `groups` and releases the others. A group without a
+        /// driver, or whose last read failed, looks it up. With `recheck` (the disk list
+        /// changed), every group looks it up again, and keeps its counters only when it
+        /// finds the same driver: a new disk can take the BSD name of one that went.
+        pub(super) fn sync(&mut self, groups: &[&str], recheck: bool) {
+            self.by_group
+                .retain(|group, _| groups.contains(&group.as_str()));
+            for &group in groups {
+                let failed = self.by_group.get(group).map(|driver| driver.failed);
+                if !needs_lookup(failed, recheck) {
+                    continue;
+                }
+                let Some(object) = find_driver(group) else {
+                    self.by_group.remove(group);
+                    continue;
+                };
+                let id = object.id();
+                match self.by_group.get_mut(group) {
+                    Some(driver) if id.is_some() && driver.id == id => {
+                        driver.object = object;
+                        driver.failed = false;
+                    }
+                    _ => {
+                        let driver = Driver {
+                            object,
+                            id,
+                            last: None,
+                            failed: false,
+                        };
+                        self.by_group.insert(group.to_owned(), driver);
+                    }
+                }
+            }
+        }
+
+        /// Reads the counters of `group` and returns the usage since the last read. A group
+        /// without a driver has no counter (all zero).
+        pub(super) fn usage(&mut self, group: &str) -> DiskUsage {
+            let Some(driver) = self.by_group.get_mut(group) else {
+                return DiskUsage::default();
+            };
+            let now = driver.object.statistics();
+            let usage = counter_usage(driver.last, now);
+            driver.failed = now.is_none();
+            driver.last = now.or(driver.last);
+            usage
+        }
+    }
+
+    #[link(name = "objc", kind = "dylib")]
+    unsafe extern "C" {
+        fn objc_autoreleasePoolPush() -> *mut c_void;
+        fn objc_autoreleasePoolPop(pool: *mut c_void);
+    }
+
+    /// An autorelease pool for the length of a scope, as sysinfo uses around its disk list:
+    /// the volume URL calls run Foundation code that can autorelease objects, and the
+    /// sampler thread has no pool of its own.
+    struct Pool(*mut c_void);
+
+    impl Pool {
+        fn push() -> Self {
+            // SAFETY: pushing a pool has no preconditions; `Drop` pops this pool, on this
+            // thread, and no object from it is used after that.
+            Self(unsafe { objc_autoreleasePoolPush() })
+        }
+    }
+
+    impl Drop for Pool {
+        fn drop(&mut self) {
+            // SAFETY: `self.0` came from the push above on this thread, and the pools are
+            // popped in reverse order because each `Pool` lives in one scope.
+            unsafe { objc_autoreleasePoolPop(self.0) }
+        }
+    }
+
+    /// The (total, available) bytes of the volume mounted at `mount`, as sysinfo reads
+    /// them: available for important usage, or plain available when that is 0. A fresh
+    /// URL each time, so no cached value is given.
+    pub(super) fn volume_space(mount: &Path) -> (Option<u64>, Option<u64>) {
+        let _pool = Pool::push();
+        // SAFETY: these are constant CFStrings that CoreFoundation defines and never frees.
+        let keys = unsafe {
+            [
+                kCFURLVolumeTotalCapacityKey,
+                kCFURLVolumeAvailableCapacityForImportantUsageKey,
+                kCFURLVolumeAvailableCapacityKey,
+            ]
+        };
+        let [Some(total), Some(important), Some(available)] = keys else {
+            return (None, None);
+        };
+        let Some(url) = CFURL::from_directory_path(mount) else {
+            return (None, None);
+        };
+        let keys = CFArray::from_objects(&[total, important, available]);
+        // SAFETY: `keys` is an array of CFStrings, the type the call wants, and a null
+        // error pointer is allowed. The result is a new dictionary (+1) that `CFRetained`
+        // owns and releases once.
+        let props =
+            unsafe { url.resource_properties_for_keys(Some(keys.as_opaque()), ptr::null_mut()) };
+        let Some(props) = props else {
+            return (None, None);
+        };
+        let available = number(&props, important)
+            .filter(|&bytes| bytes != 0)
+            .or_else(|| number(&props, available));
+        (number(&props, total), available)
+    }
 }
 
 #[cfg(test)]
@@ -735,6 +1197,300 @@ mod tests {
             ("disk5", "apfs", "/Volumes/USB", 100),
         ];
         assert_eq!(io_refresh_set(&items, true), [0, 3]);
+    }
+
+    #[test]
+    fn space_reads_skip_volumes_that_keep_volume_drops_by_mount_or_file_system() {
+        let items = [
+            ("/", "apfs"),
+            ("/System/Volumes/VM", "apfs"),
+            ("/System/Volumes/Data", "apfs"),
+            ("/dev", "devfs"),
+            ("/Volumes/USB", "msdos"),
+            ("/snap/core/1", "ext4"),
+        ];
+        assert_eq!(space_reads(&items, &[], true), [0, 2, 4], "the space read");
+        assert_eq!(
+            space_reads(&items, &[1, 3, 4], false),
+            [4],
+            "a re-list reads only new disks"
+        );
+        assert!(space_reads(&items, &[], false).is_empty());
+        assert!(space_reads(&items, &[99], false).is_empty(), "a bad index");
+        assert!(space_reads(&[], &[], true).is_empty());
+    }
+
+    #[test]
+    fn keep_mount_is_keep_volume_without_the_size() {
+        for (mount, fs) in [
+            ("/", "apfs"),
+            ("/System/Volumes/Data", "apfs"),
+            ("/System/Volumes/VM", "apfs"),
+            ("/dev", "devfs"),
+            ("/snap/x", "ext4"),
+        ] {
+            assert_eq!(
+                keep_mount(mount, fs),
+                keep_volume(mount, fs, 1),
+                "{mount} {fs}"
+            );
+            assert!(!keep_volume(mount, fs, 0), "{mount} {fs} of unknown size");
+        }
+    }
+
+    #[test]
+    fn merge_space_keeps_the_last_value_of_a_failed_read() {
+        assert_eq!(merge_space(None, (Some(100), Some(40))), Some((100, 40)));
+        assert_eq!(
+            merge_space(Some((100, 40)), (Some(100), Some(30))),
+            Some((100, 30))
+        );
+        assert_eq!(merge_space(Some((100, 40)), (None, None)), Some((100, 40)));
+        assert_eq!(
+            merge_space(Some((100, 40)), (Some(200), None)),
+            Some((200, 40))
+        );
+        assert_eq!(
+            merge_space(Some((100, 40)), (None, Some(10))),
+            Some((100, 10))
+        );
+        assert_eq!(merge_space(None, (None, Some(10))), Some((0, 10)));
+        assert_eq!(merge_space(None, (None, None)), None);
+    }
+
+    #[test]
+    fn a_leader_not_read_on_the_last_call_moves_no_bytes() {
+        // Disk 2 just became the leader of its group: its counter last moved when it was
+        // listed, so its delta does not span this interval.
+        let keys = [key("sda1", "/"), key("sda1", "/home"), key("sdb1", "/data")];
+        let mut own = [usage(100, 10), usage(0, 0), usage(9_000, 900)];
+        let last = HashSet::from([key("sda1", "/"), key("sdc1", "/gone")]);
+        let read = fresh_deltas(&mut own, &keys, &[0, 2], &last);
+        assert_eq!(own, [usage(100, 10), usage(0, 0), usage(0, 0)]);
+        assert_eq!(own[2].total_read_bytes, 1_000_000, "the totals stay");
+        assert_eq!(
+            read,
+            HashSet::from([key("sda1", "/"), key("sdb1", "/data")])
+        );
+
+        let mut next = [usage(50, 5), usage(0, 0), usage(70, 7)];
+        fresh_deltas(&mut next, &keys, &[0, 2], &read);
+        assert_eq!(
+            next,
+            [usage(50, 5), usage(0, 0), usage(70, 7)],
+            "read last time"
+        );
+    }
+
+    #[test]
+    fn counter_usage_moves_bytes_only_between_two_reads() {
+        let totals = |read, written| DiskUsage {
+            read_bytes: 0,
+            written_bytes: 0,
+            total_read_bytes: read,
+            total_written_bytes: written,
+        };
+        assert_eq!(counter_usage(None, None), DiskUsage::default());
+        assert_eq!(
+            counter_usage(None, Some((500, 70))),
+            totals(500, 70),
+            "first read"
+        );
+        assert_eq!(
+            counter_usage(Some((500, 70)), Some((800, 90))),
+            DiskUsage {
+                read_bytes: 300,
+                written_bytes: 20,
+                total_read_bytes: 800,
+                total_written_bytes: 90,
+            }
+        );
+        assert_eq!(
+            counter_usage(Some((500, 70)), None),
+            totals(500, 70),
+            "a failed read"
+        );
+        assert_eq!(
+            counter_usage(Some((500, 70)), Some((100, 80))),
+            DiskUsage {
+                read_bytes: 0,
+                written_bytes: 10,
+                total_read_bytes: 100,
+                total_written_bytes: 80,
+            },
+            "a counter that went down moves nothing"
+        );
+    }
+
+    #[test]
+    fn a_driver_is_looked_up_when_missing_failed_or_the_list_changed() {
+        assert!(needs_lookup(None, false), "no driver yet");
+        assert!(needs_lookup(Some(true), false), "the last read failed");
+        assert!(!needs_lookup(Some(false), false));
+        assert!(needs_lookup(Some(false), true), "the disk list changed");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn statistics_bytes_reads_the_two_byte_counters() {
+        use objc2_core_foundation::{CFDictionary, CFNumber, CFString, CFType};
+        let dict = |entries: &[(&str, &CFType)]| {
+            let keys: Vec<_> = entries.iter().map(|(k, _)| CFString::from_str(k)).collect();
+            let key_refs: Vec<&CFString> = keys.iter().map(|k| &**k).collect();
+            let values: Vec<&CFType> = entries.iter().map(|(_, v)| *v).collect();
+            CFDictionary::<CFString, CFType>::from_slices(&key_refs, &values)
+        };
+        let read = CFNumber::new_i64(3_855_113_187_328);
+        let written = CFNumber::new_i64(2_942_327_005_184);
+        let ops = CFNumber::new_i64(70_456_726);
+        let text = CFString::from_str("many");
+        let full = dict(&[
+            ("Operations (Write)", ops.as_ref()),
+            ("Bytes (Read)", read.as_ref()),
+            ("Bytes (Write)", written.as_ref()),
+        ]);
+        assert_eq!(
+            apple::statistics_bytes(full.as_opaque()),
+            Some((3_855_113_187_328, 2_942_327_005_184))
+        );
+        let missing = dict(&[("Bytes (Read)", read.as_ref())]);
+        assert_eq!(apple::statistics_bytes(missing.as_opaque()), None);
+        let not_a_number = dict(&[
+            ("Bytes (Read)", read.as_ref()),
+            ("Bytes (Write)", text.as_ref()),
+        ]);
+        assert_eq!(apple::statistics_bytes(not_a_number.as_opaque()), None);
+        assert_eq!(apple::statistics_bytes(dict(&[]).as_opaque()), None);
+    }
+
+    /// The whole disk and the sysinfo I/O totals of each kept volume of this host.
+    #[cfg(target_os = "macos")]
+    fn sysinfo_disk_totals() -> Vec<(String, (u64, u64))> {
+        let disks = Disks::new_with_refreshed_list_specifics(
+            DiskRefreshKind::nothing().with_io_usage().with_storage(),
+        );
+        disks
+            .list()
+            .iter()
+            .filter(|disk| {
+                keep_volume(
+                    &disk.mount_point().to_string_lossy(),
+                    &disk.file_system().to_string_lossy(),
+                    disk.total_space(),
+                )
+            })
+            .filter_map(|disk| {
+                let from = mount_source(disk.mount_point())?;
+                let whole = apple_whole_disk(&from)?.to_owned();
+                let usage = disk.usage();
+                Some((whole, (usage.total_read_bytes, usage.total_written_bytes)))
+            })
+            .collect()
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn kept_drivers_give_the_disk_counters_of_sysinfo() {
+        let theirs = sysinfo_disk_totals();
+        assert!(!theirs.is_empty(), "this Mac has a kept volume on a disk");
+        let mut groups: Vec<&str> = theirs.iter().map(|(group, _)| group.as_str()).collect();
+        groups.sort_unstable();
+        groups.dedup();
+        let mut drivers = apple::Drivers::default();
+        drivers.sync(&groups, true);
+        let totals = |drivers: &mut apple::Drivers, group| {
+            let usage = drivers.usage(group);
+            (usage.total_read_bytes, usage.total_written_bytes)
+        };
+        let before: Vec<(u64, u64)> = groups.iter().map(|g| totals(&mut drivers, g)).collect();
+        let theirs = sysinfo_disk_totals();
+        let after: Vec<(u64, u64)> = groups.iter().map(|g| totals(&mut drivers, g)).collect();
+        for (group, (read, written)) in &theirs {
+            let at = groups.iter().position(|g| g == group).expect("same groups");
+            let (low, high) = (before[at], after[at]);
+            // The counters only grow, so sysinfo's read lies between the two of ours.
+            assert!(low.0 > 0 || low.1 > 0, "{group} has counters");
+            assert!(
+                (low.0..=high.0).contains(read),
+                "{group} read {low:?} {read} {high:?}"
+            );
+            assert!(
+                (low.1..=high.1).contains(written),
+                "{group} written {low:?} {written} {high:?}"
+            );
+        }
+
+        // A recheck finds the same drivers and keeps their counters: no first read.
+        drivers.sync(&groups, true);
+        let usage = drivers.usage(groups[0]);
+        assert!(usage.total_read_bytes >= after[0].0);
+        // A group that goes is released; one that is not a disk has no counter.
+        drivers.sync(&[], false);
+        assert_eq!(drivers.usage(groups[0]), DiskUsage::default());
+        drivers.sync(&["disk999"], false);
+        assert_eq!(drivers.usage("disk999"), DiskUsage::default());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn volume_space_gives_the_space_of_sysinfo() {
+        let disks =
+            Disks::new_with_refreshed_list_specifics(DiskRefreshKind::nothing().with_storage());
+        let root = disks
+            .list()
+            .iter()
+            .find(|disk| disk.mount_point() == std::path::Path::new("/"))
+            .expect("a root volume");
+        let (total, available) = apple::volume_space(root.mount_point());
+        assert_eq!(total, Some(root.total_space()));
+        let available = available.expect("available space");
+        // Free space moves between the reads; 1 GiB is far more than a test run writes.
+        assert!(
+            available.abs_diff(root.available_space()) < 1 << 30,
+            "{available} vs {}",
+            root.available_space()
+        );
+        let missing = apple::volume_space(std::path::Path::new("/nonexistent/rtop"));
+        assert_eq!(missing, (None, None));
+    }
+
+    #[test]
+    fn collector_keeps_the_volumes_and_sizes_of_a_full_sysinfo_list() {
+        let disks =
+            Disks::new_with_refreshed_list_specifics(DiskRefreshKind::nothing().with_storage());
+        let raws: Vec<(String, String, String, u64)> = disks
+            .list()
+            .iter()
+            .map(|disk| {
+                (
+                    disk.name().to_string_lossy().into_owned(),
+                    disk.file_system().to_string_lossy().into_owned(),
+                    disk.mount_point().to_string_lossy().into_owned(),
+                    disk.total_space(),
+                )
+            })
+            .filter(|(_, fs, mount, total)| {
+                keep_volume(mount, fs, *total) && !is_file_mount(std::path::Path::new(mount))
+            })
+            .collect();
+        let items: Vec<(&str, &str, &str)> = raws
+            .iter()
+            .map(|(device, fs, mount, _)| (device.as_str(), fs.as_str(), mount.as_str()))
+            .collect();
+        let mut theirs: Vec<(String, u64)> = drop_zfs_children(&items)
+            .into_iter()
+            .map(|i| (raws[i].2.clone(), raws[i].3))
+            .collect();
+        theirs.sort();
+
+        let storage = StorageCollector::new().collect(1.0, true, true);
+        let mut ours: Vec<(String, u64)> = storage
+            .volumes
+            .iter()
+            .map(|v| (v.mount.clone(), v.total))
+            .collect();
+        ours.sort();
+        assert_eq!(ours, theirs);
     }
 
     #[test]
