@@ -118,13 +118,91 @@ pub fn columns_for_width(inner_width: u16, state_and_threads: bool) -> Vec<Colum
         .collect()
 }
 
-/// The caller clamps the selection before the call.
+/// Pure. The rows `start..end` that ratatui's `Table` shows, for `len` rows of 1 line each,
+/// no row margins, and `height` lines for the rows (the area inside the block, less the header).
+pub fn row_window(
+    len: usize,
+    offset: usize,
+    selected: Option<usize>,
+    height: u16,
+) -> (usize, usize) {
+    // `Table::visible_rows` in ratatui-widgets 0.3.2 (table.rs, about line 996), with each row
+    // 1 line high, so its loops reduce to sums.
+    if len == 0 {
+        return (0, 0);
+    }
+    let height = usize::from(height);
+    let last = len - 1;
+    let mut start = offset.min(last);
+    if let Some(selected) = selected {
+        start = start.min(selected);
+    }
+    // Fill the lines from `start`.
+    let mut end = start + height.min(len - start);
+    // Scroll down until the selected row shows. Each step adds a row at the bottom and drops
+    // one from the top, so the window ends on the selected row and keeps `height` rows.
+    // With no lines at all, ratatui ends with `start == end == selected + 1`, and so does this.
+    if let Some(selected) = selected.map(|s| s.min(last))
+        && selected >= end
+    {
+        end = selected + 1;
+        start = end - height;
+    }
+    // ratatui adds a partial row when lines are left over. Rows of 1 line leave none unless
+    // the rows ran out, so this never fires; it stays to match ratatui.
+    if end - start < height && end < len {
+        end += 1;
+    }
+    (start, end)
+}
+
+/// The rows above the body inside the block: the header, with no margins.
+const HEADER_HEIGHT: u16 = 1;
+
+/// Builds `Row`s only for the rows that show, not for every process. `state` ends as
+/// ratatui's `Table` would leave it after a draw of every row: the same selection clamp and
+/// the same offset (see `row_window`).
 pub fn draw_processes(
     frame: &mut Frame,
     area: Rect,
     table: &ProcTable<'_>,
     state: &mut TableState,
 ) {
+    let block = panel(title(table));
+    let inner = block.inner(area);
+    let len = table.rows.len();
+    // `Table::render` leaves the state alone when nothing fits inside the block.
+    let window = if inner.is_empty() {
+        0..0
+    } else {
+        if state.selected().is_some_and(|s| s >= len) {
+            state.select(Some(len.saturating_sub(1)));
+        }
+        if len == 0 {
+            // `select(None)` also sets the offset to 0, as in ratatui.
+            state.select(None);
+        }
+        let (start, end) = row_window(
+            len,
+            state.offset(),
+            state.selected(),
+            inner.height.saturating_sub(HEADER_HEIGHT),
+        );
+        // `render_rows` returns before it sets the offset when there are no rows.
+        if len > 0 {
+            *state.offset_mut() = start;
+        }
+        start..end
+    };
+    // The window is drawn from its own top, so the selection moves with it. A selection
+    // outside the window (only when no row fits) draws no highlight, as in ratatui.
+    let mut window_state = TableState::default().with_selected(
+        state
+            .selected()
+            .filter(|s| window.contains(s))
+            .map(|s| s - window.start),
+    );
+
     let columns = columns_for_width(area.width.saturating_sub(3), table.state_and_threads);
     let descending = table.sort.descending() != table.reverse;
 
@@ -144,7 +222,7 @@ pub fn draw_processes(
         Cell::from(align(Line::from(text), column)).style(style)
     }));
 
-    let rows = table.rows.iter().map(|row| {
+    let rows = table.rows[window].iter().map(|row| {
         Row::new(
             columns
                 .iter()
@@ -154,12 +232,12 @@ pub fn draw_processes(
 
     let widget = Table::new(rows, columns.iter().map(|column| column.width()))
         .header(header)
-        .block(panel(title(table)))
+        .block(block)
         .column_spacing(1)
         .row_highlight_style(Style::new().bg(SELECTED).add_modifier(Modifier::BOLD))
         .highlight_symbol("▌")
         .highlight_spacing(HighlightSpacing::Always);
-    frame.render_stateful_widget(widget, area, state);
+    frame.render_stateful_widget(widget, area, &mut window_state);
 }
 
 fn title(table: &ProcTable<'_>) -> String {
@@ -623,6 +701,302 @@ mod tests {
             .find(|line| line.contains("Send a signal"))
             .unwrap();
         assert!(line.contains("  Send"), "{line}");
+    }
+
+    #[test]
+    fn row_window_starts_at_the_top() {
+        assert_eq!(row_window(100, 0, Some(0), 10), (0, 10));
+        assert_eq!(
+            row_window(5, 0, Some(0), 10),
+            (0, 5),
+            "fewer rows than lines"
+        );
+        assert_eq!(row_window(0, 7, None, 10), (0, 0), "no rows");
+    }
+
+    #[test]
+    fn row_window_keeps_the_offset_while_the_selection_shows() {
+        assert_eq!(row_window(100, 3, Some(7), 10), (3, 13));
+        assert_eq!(row_window(100, 3, None, 10), (3, 13));
+        assert_eq!(
+            row_window(100, 95, Some(99), 10),
+            (95, 100),
+            "ratatui does not pull the offset back to fill the view"
+        );
+    }
+
+    #[test]
+    fn row_window_scrolls_to_the_selection() {
+        assert_eq!(row_window(100, 0, Some(25), 10), (16, 26), "down");
+        assert_eq!(row_window(100, 50, Some(20), 10), (20, 30), "up");
+        assert_eq!(
+            row_window(10, 0, Some(50), 4),
+            (6, 10),
+            "past the end: the last row"
+        );
+    }
+
+    #[test]
+    fn row_window_handles_stale_offsets_and_no_room() {
+        assert_eq!(
+            row_window(100, 500, None, 10),
+            (99, 100),
+            "offset past the end"
+        );
+        assert_eq!(
+            row_window(100, 0, Some(5), 0),
+            (6, 6),
+            "no lines: as ratatui"
+        );
+        assert_eq!(row_window(100, 4, None, 0), (4, 4));
+    }
+
+    // The equivalence tests: the windowed table against the old one, which builds a row for
+    // every process and lets ratatui pick the window.
+
+    /// The old `draw_processes`, kept as the reference.
+    fn draw_full(frame: &mut Frame, area: Rect, table: &ProcTable<'_>, state: &mut TableState) {
+        let columns = columns_for_width(area.width.saturating_sub(3), table.state_and_threads);
+        let descending = table.sort.descending() != table.reverse;
+        let header = Row::new(columns.iter().map(|&column| {
+            let (text, style) = if column.sorts(table.sort) {
+                let arrow = if descending { "▼" } else { "▲" };
+                (
+                    format!("{} {arrow}", column.title(table.show_cmd)),
+                    Style::new().fg(PINK).add_modifier(Modifier::BOLD),
+                )
+            } else {
+                (
+                    column.title(table.show_cmd).to_owned(),
+                    Style::new().fg(DIM).add_modifier(Modifier::BOLD),
+                )
+            };
+            Cell::from(align(Line::from(text), column)).style(style)
+        }));
+        let rows = table.rows.iter().map(|row| {
+            Row::new(
+                columns
+                    .iter()
+                    .map(|&column| Cell::from(align(cell(row, column, table.show_cmd), column))),
+            )
+        });
+        let widget = Table::new(rows, columns.iter().map(|column| column.width()))
+            .header(header)
+            .block(panel(title(table)))
+            .column_spacing(1)
+            .row_highlight_style(Style::new().bg(SELECTED).add_modifier(Modifier::BOLD))
+            .highlight_symbol("▌")
+            .highlight_spacing(HighlightSpacing::Always);
+        frame.render_stateful_widget(widget, area, state);
+    }
+
+    fn draw_to_buffer(
+        width: u16,
+        height: u16,
+        draw: impl FnOnce(&mut Frame),
+    ) -> ratatui::buffer::Buffer {
+        use ratatui::{Terminal, backend::TestBackend};
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(draw).unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    /// `n` processes, `worker-0` busiest, with every column filled.
+    fn many_procs(n: usize) -> Vec<ProcInfo> {
+        (0..n)
+            .map(|i| ProcInfo {
+                pid: 1_000 + i as u32,
+                parent: Some(1),
+                ident: i as u64,
+                name: format!("worker-{i}").into(),
+                cmd: format!("/bin/worker-{i} --id {i}").into(),
+                user: Some("alice".into()),
+                state: crate::process::ProcState::Run,
+                threads: Some(2),
+                cpu: (n - i) as f32,
+                memory: (i as u64) << 20,
+                read_rate: (i as u64 % 3) * 1024,
+                write_rate: 0,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn windowed_table_matches_the_full_table() {
+        let mut cases = 0;
+        for len in [0, 1, 3, 9, 40, 600] {
+            let procs = many_procs(len);
+            let rows = rows(&procs);
+            let t = ProcTable {
+                total: len,
+                ..table(&rows)
+            };
+            for (width, height) in [(110, 1), (110, 2), (110, 3), (110, 4), (110, 5), (110, 12)]
+                .into_iter()
+                .chain([(50, 8), (110, 40), (2, 6)])
+            {
+                let selections = [None, Some(0), Some(len / 2), Some(len.saturating_sub(1))]
+                    .into_iter()
+                    .chain([Some(len), Some(len + 50)]);
+                for selected in selections {
+                    for offset in [0, 2, len / 2, len.saturating_sub(1), len + 10] {
+                        let start = TableState::default()
+                            .with_offset(offset)
+                            .with_selected(selected);
+                        let mut want_state = start;
+                        let want = draw_to_buffer(width, height, |frame| {
+                            draw_full(frame, frame.area(), &t, &mut want_state);
+                        });
+                        let mut got_state = start;
+                        let got = draw_to_buffer(width, height, |frame| {
+                            draw_processes(frame, frame.area(), &t, &mut got_state);
+                        });
+                        let case = format!(
+                            "{len} rows, {width}x{height}, selected {selected:?}, offset {offset}"
+                        );
+                        assert_eq!(got, want, "{case}");
+                        assert_eq!(got_state, want_state, "{case}");
+                        cases += 1;
+                    }
+                }
+            }
+        }
+        assert!(cases > 1_000, "{cases}");
+    }
+
+    /// The old `ui::draw_processes`, drawn with the full table.
+    fn draw_app_full(
+        frame: &mut Frame,
+        area: Rect,
+        app: &mut crate::app::App,
+    ) -> Option<KillTarget> {
+        let rows = app.visible_rows();
+        let mut state = app.table;
+        crate::app::clamp_selection(&mut state, rows.len());
+        let highlighted = state
+            .selected()
+            .and_then(|i| rows.get(i))
+            .map(|row| KillTarget {
+                pid: row.proc.pid,
+                ident: row.proc.ident,
+                name: row.proc.name.clone(),
+            });
+        let table = ProcTable {
+            rows: &rows,
+            total: app.snapshot.as_ref().map_or(0, |s| s.processes.len()),
+            sort: app.sort,
+            reverse: app.reverse,
+            tree: app.tree,
+            show_cmd: app.show_cmd,
+            filter: &app.filter,
+            state_and_threads: !cfg!(windows),
+        };
+        draw_full(frame, area, &table, &mut state);
+        drop(rows);
+        app.table = state;
+        highlighted
+    }
+
+    enum Step {
+        Keys(&'static str),
+        Key(ratatui::crossterm::event::KeyCode),
+        Resize(u16),
+        /// A new snapshot with this many processes, as when processes exit.
+        Processes(usize),
+    }
+
+    #[test]
+    fn key_sequences_leave_the_same_state_as_the_full_table() {
+        use crate::app::{App, Event};
+        use crate::metrics::{HostInfo, Snapshot};
+        use Step::{Key, Keys, Processes, Resize};
+        use ratatui::crossterm::event::{KeyCode, KeyEvent};
+        use std::sync::Arc;
+        use std::sync::atomic::AtomicU64;
+
+        let snapshot = |n| {
+            Event::Metrics(Snapshot {
+                processes: many_procs(n),
+                ..Snapshot::default()
+            })
+        };
+        let script = [
+            Keys("jjjjjjjjjjjj"),
+            Key(KeyCode::PageDown),
+            Keys("k"),
+            Key(KeyCode::PageDown),
+            Key(KeyCode::PageDown),
+            Resize(6),
+            Key(KeyCode::PageUp),
+            Keys("G"),
+            Resize(30),
+            Keys("kkk"),
+            Resize(4),
+            Keys("g"),
+            Key(KeyCode::PageDown),
+            Resize(3),
+            Keys("jj"),
+            Resize(14),
+            // The filter: `/worker-1` keeps 11 of 60 rows.
+            Keys("/worker-1"),
+            Key(KeyCode::Enter),
+            Keys("G"),
+            Keys("k"),
+            Key(KeyCode::Esc),
+            Keys("jjj"),
+            Key(KeyCode::PageDown),
+            Processes(5),
+            Keys("kG"),
+            Processes(0),
+            Keys("jk"),
+            Processes(60),
+            Keys("Gkkkkkkkkkkkkkkkkk"),
+            Key(KeyCode::PageUp),
+            Keys("/zzz"),
+            Key(KeyCode::Enter),
+            Keys("jG"),
+            Key(KeyCode::Esc),
+            Keys("j"),
+        ];
+
+        for (width, start_height) in [(110, 12), (110, 5), (110, 3), (50, 20), (110, 40)] {
+            let mut windowed = App::new(HostInfo::default(), Arc::new(AtomicU64::new(1_000)));
+            let mut full = App::new(HostInfo::default(), Arc::new(AtomicU64::new(1_000)));
+            windowed.handle(snapshot(60));
+            full.handle(snapshot(60));
+            let mut height = start_height;
+            for (i, step) in script.iter().enumerate() {
+                let codes: Vec<KeyCode> = match step {
+                    Keys(keys) => keys.chars().map(KeyCode::Char).collect(),
+                    Key(code) => vec![*code],
+                    Resize(h) => {
+                        height = *h;
+                        Vec::new()
+                    }
+                    Processes(n) => {
+                        windowed.handle(snapshot(*n));
+                        full.handle(snapshot(*n));
+                        Vec::new()
+                    }
+                };
+                for code in codes {
+                    windowed.handle(Event::Key(KeyEvent::from(code)));
+                    full.handle(Event::Key(KeyEvent::from(code)));
+                }
+                let mut got_target = None;
+                let got = draw_to_buffer(width, height, |frame| {
+                    got_target = super::super::draw_processes(frame, frame.area(), &mut windowed);
+                });
+                let mut want_target = None;
+                let want = draw_to_buffer(width, height, |frame| {
+                    want_target = draw_app_full(frame, frame.area(), &mut full);
+                });
+                let case = format!("{width}x{start_height}, step {i}");
+                assert_eq!(got, want, "{case}");
+                assert_eq!(windowed.table, full.table, "{case}");
+                assert_eq!(got_target, want_target, "{case}");
+            }
+        }
     }
 
     #[test]
