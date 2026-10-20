@@ -617,18 +617,25 @@ mod tests {
             Duration::new(now.tv_sec as u64, now.tv_nsec as u32)
         }
         fn cost(name: &str, calls: usize, mut work: impl FnMut()) {
+            let mut wall = 0.0;
             let mut times: Vec<f64> = (0..calls)
                 .map(|_| {
                     thread::sleep(Duration::from_millis(20));
                     let started = thread_cpu();
+                    let clock = Instant::now();
                     work();
+                    wall += clock.elapsed().as_secs_f64() * 1_000.0;
                     (thread_cpu() - started).as_secs_f64() * 1_000.0
                 })
                 .collect();
             crate::order::sort_by(&mut times, |a, b| a.total_cmp(b));
-            let mean = times.iter().sum::<f64>() / times.len().max(1) as f64;
+            let count = times.len().max(1) as f64;
+            let mean = times.iter().sum::<f64>() / count;
             let median = times.get(times.len() / 2).copied().unwrap_or(0.0);
-            println!("  {name}: mean {mean:.3} ms, median {median:.3} ms over {calls}");
+            let wall = wall / count;
+            println!(
+                "  {name}: mean {mean:.3} ms, median {median:.3} ms over {calls} (wall mean {wall:.3} ms)"
+            );
         }
 
         let mut sampler = Sampler::new(Arc::new(AtomicU16::new(PanelSet::ALL.bits())));
