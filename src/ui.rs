@@ -419,7 +419,7 @@ fn draw_processes(frame: &mut Frame, area: Rect, app: &mut App) -> Option<KillTa
         .and_then(|i| rows.get(i))
         .map(|row| KillTarget {
             pid: row.proc.pid,
-            start_time: row.proc.start_time,
+            ident: row.proc.ident,
             name: row.proc.name.clone(),
         });
     let table = process::ProcTable {
@@ -649,8 +649,8 @@ mod tests {
         (0..10)
             .map(|i| ProcInfo {
                 pid: 100 + i,
-                start_time: 5_000,
-                name: format!("worker-{i}"),
+                ident: 5_000,
+                name: format!("worker-{i}").into(),
                 cpu: i as f32,
                 ..ProcInfo::default()
             })
@@ -837,7 +837,7 @@ mod tests {
             app.highlighted,
             Some(KillTarget {
                 pid: 109,
-                start_time: 5_000,
+                ident: 5_000,
                 name: "worker-9".into()
             }),
             "busiest first"
@@ -865,7 +865,7 @@ mod tests {
             Mode::Help,
             Mode::ConfirmKill(KillTarget {
                 pid: 4242,
-                start_time: 0,
+                ident: 0,
                 name: "cargo".into(),
             }),
         ];

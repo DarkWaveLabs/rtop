@@ -436,7 +436,7 @@ mod tests {
             name: name.into(),
             cpu,
             memory,
-            start_time: 1_000 + u64::from(pid),
+            ident: 1_000 + u64::from(pid),
             ..ProcInfo::default()
         }
     }
@@ -472,7 +472,7 @@ mod tests {
     fn target(pid: u32, name: &str) -> KillTarget {
         KillTarget {
             pid,
-            start_time: 1_000 + u64::from(pid),
+            ident: 1_000 + u64::from(pid),
             name: name.into(),
         }
     }

@@ -218,7 +218,7 @@ fn cell(row: &ProcRow<'_>, column: Column, show_cmd: bool) -> Line<'static> {
         Column::Write => io_line(p.write_rate),
         Column::Name => {
             let text = if !show_cmd {
-                p.name.clone()
+                p.name.to_string()
             } else if p.cmd.is_empty() {
                 // Kernel threads and processes whose command line is not read yet.
                 format!("[{}]", p.name)
@@ -361,7 +361,7 @@ mod tests {
             ProcInfo {
                 pid: 4242,
                 parent: Some(1),
-                start_time: 100,
+                ident: 100,
                 name: "cargo".into(),
                 cmd: "cargo build --release".into(),
                 user: Some("alice".into()),
@@ -571,7 +571,7 @@ mod tests {
     fn kill_prompt_shows_target_and_keys() {
         let target = KillTarget {
             pid: 4242,
-            start_time: 100,
+            ident: 100,
             name: "cargo".into(),
         };
         let screen = render_to_string(80, 24, |frame| {
@@ -592,8 +592,8 @@ mod tests {
     fn kill_prompt_cuts_a_long_name() {
         let target = KillTarget {
             pid: 4242,
-            start_time: 100,
-            name: "x".repeat(200),
+            ident: 100,
+            name: "x".repeat(200).into(),
         };
         let screen = render_to_string(80, 24, |frame| {
             draw_kill_prompt(frame, frame.area(), &target);
@@ -606,7 +606,7 @@ mod tests {
     fn kill_prompt_clears_the_cells_under_it() {
         let target = KillTarget {
             pid: 4242,
-            start_time: 100,
+            ident: 100,
             name: "cargo".into(),
         };
         let screen = render_to_string(80, 24, |frame| {
@@ -631,7 +631,7 @@ mod tests {
         let rows = rows(&procs);
         let target = KillTarget {
             pid: 1234,
-            start_time: 1,
+            ident: 1,
             name: "zsh".into(),
         };
         for (w, h) in [(1, 1), (10, 3), (3, 1), (200, 2)] {

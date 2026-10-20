@@ -15,11 +15,11 @@ use std::time::{Duration, Instant};
 
 #[cfg(not(target_os = "linux"))]
 use sysinfo::Networks;
-use sysinfo::{MINIMUM_CPU_UPDATE_INTERVAL, ProcessesToUpdate, System};
+use sysinfo::{MINIMUM_CPU_UPDATE_INTERVAL, System};
 
 use crate::app::Event;
 use crate::net::{self, NetIface};
-use crate::process::{self, KillRequest, ProcCollector};
+use crate::process::{KillRequest, ProcCollector};
 use crate::sensors::{SensorCollector, Sensors};
 use crate::storage::{Storage, StorageCollector};
 use crate::zfs::{ZfsArc, ZfsCollector};
@@ -130,7 +130,9 @@ impl Sampler {
     fn new() -> Self {
         let mut sys = System::new();
         sys.refresh_cpu_usage();
-        sys.refresh_processes_specifics(ProcessesToUpdate::All, true, process::refresh_kind(true));
+        // A baseline, so the first tick has CPU and I/O rates. The list itself is not used.
+        let mut procs = ProcCollector::new();
+        procs.collect(&mut sys, 1.0, true);
         #[cfg(target_os = "linux")]
         let networks = {
             let mut networks = net::SysfsNet::default();
@@ -146,7 +148,7 @@ impl Sampler {
             networks,
             last: Instant::now(),
             last_slow: None,
-            procs: ProcCollector::new(),
+            procs,
             storage: StorageCollector::new(),
             zfs: ZfsCollector::new(),
             sensors: SensorCollector::new(),
@@ -162,11 +164,6 @@ impl Sampler {
 
         self.sys.refresh_cpu_usage();
         self.sys.refresh_memory();
-        self.sys.refresh_processes_specifics(
-            ProcessesToUpdate::All,
-            true,
-            process::refresh_kind(slow),
-        );
         #[cfg(not(target_os = "linux"))]
         self.networks.refresh(true);
 
@@ -179,7 +176,7 @@ impl Sampler {
         #[cfg(target_os = "linux")]
         let interfaces = self.networks.collect(secs);
         let (rx_rate, tx_rate) = net::totals(&interfaces);
-        let processes = self.procs.collect(&self.sys, secs, slow);
+        let processes = self.procs.collect(&mut self.sys, secs, slow);
         let storage = self.storage.collect(secs, slow);
         let zfs = self.zfs.collect(slow);
         let sensors = self.sensors.collect(slow);
@@ -222,7 +219,7 @@ impl Sampler {
         loop {
             // A closed kill channel only means that no more kills come; sampling goes on.
             while let Ok(req) = kills.try_recv() {
-                let report = process::send_signal(&mut self.sys, &req, std::process::id());
+                let report = self.procs.signal(&mut self.sys, &req, std::process::id());
                 tx.send(Event::KillDone(report)).map_err(|_| Disconnected)?;
             }
             let due = Duration::from_millis(interval_ms.load(Ordering::Relaxed));
