@@ -587,18 +587,41 @@ fn file_name(path: &[u8]) -> String {
         .unwrap_or_default()
 }
 
+/// Pure. The NUL bytes after the NUL of the exec path in a `KERN_PROCARGS2` buffer. XNU
+/// (`exec_extract_strings`) pads the saved path to a multiple of the pointer size, 8 bytes,
+/// counted from the start of the path. Measured on macOS 27 (arm64) for exec paths of
+/// every length modulo 8, and for every readable process.
+fn path_padding(path_len: usize) -> usize {
+    (8 - (path_len + 1) % 8) % 8
+}
+
 /// Pure. Parses a `KERN_PROCARGS2` buffer into the name (the file name of the exec path)
-/// and the command line. The buffer holds `argc` (a native `int`), the exec path, NUL
-/// padding, then `argc` NUL-terminated arguments and the environment. Empty arguments
-/// are skipped, as `sysinfo` does, but they still count towards `argc`, so the
-/// environment never leaks into the command line. The last argument may lack its NUL.
+/// and the command line. The buffer holds `argc` (a native `int`), the exec path, its
+/// NUL and the padding of `path_padding`, then `argc` NUL-terminated arguments and the
+/// environment. The last argument may lack its NUL.
+///
+/// Only that padding is skipped: an empty `argv[0]` (Node's `process.title = ""` blanks
+/// the whole argument area) and empty arguments after it are NULs too, and each one
+/// counts towards `argc`. Apple's `ps`, `psutil` and `sysinfo` skip every NUL after the
+/// path, so for each empty leading argument they read one environment string into the
+/// command line. The kernel shares the bug: on macOS 27 it trims the environment from
+/// another process's buffer, but it finds the end of argv the same way, so the buffer
+/// then holds one environment string for each empty leading argument. Empty arguments
+/// are left out of the command line, as `sysinfo` does.
+///
+/// If the kernel ever padded more than the rule says, the extra NULs would count as
+/// empty arguments: the last arguments would be lost, but no environment text shown.
 fn parse_procargs(buf: &[u8]) -> Option<(String, String)> {
     let (argc, rest) = buf.split_first_chunk::<4>()?;
     let argc = c_int::from_ne_bytes(*argc);
     let exe_end = rest.iter().position(|&b| b == 0).unwrap_or(rest.len());
     let (exe, mut rest) = rest.split_at(exe_end);
-    let padding = rest.iter().take_while(|&&b| b == 0).count();
-    rest = &rest[padding..];
+    let skip = rest
+        .iter()
+        .take(1 + path_padding(exe_end))
+        .take_while(|&&b| b == 0)
+        .count();
+    rest = &rest[skip..];
     let mut args = Vec::new();
     for _ in 0..argc.max(0) {
         if rest.is_empty() {
@@ -1051,12 +1074,73 @@ mod tests {
 
     #[test]
     fn procargs_skips_empty_arguments_without_reading_the_environment() {
-        let buf = procargs(4, b"/bin/echo\0\0echo\0\0b\0\0SECRET=1\0");
+        let buf = procargs(4, b"/bin/echo\0\0\0\0\0\0\0echo\0\0b\0\0SECRET=1\0");
         assert_eq!(
             parse_procargs(&buf),
             Some(("echo".into(), "echo b".into())),
             "two empty arguments count towards argc"
         );
+    }
+
+    #[test]
+    fn path_padding_fills_to_eight_bytes() {
+        // The path and its NUL plus the padding make a multiple of 8.
+        for len in 0..40 {
+            assert_eq!((len + 1 + path_padding(len)) % 8, 0, "{len}");
+            assert!(path_padding(len) < 8);
+        }
+        assert_eq!(path_padding(10), 5, "/bin/sleep");
+        assert_eq!(path_padding(7), 0, "/bin/sh");
+    }
+
+    /// Buffers read from children of this Mac (macOS 27, arm64) with empty leading
+    /// arguments. The kernel drops the environment of another process, but its own count
+    /// of argv skips every NUL after the path too, so one environment string is left in
+    /// for each empty leading argument.
+    #[test]
+    fn procargs_empty_argv0_layouts_seen_on_macos() {
+        let pad5 = b"/bin/sleep\0\0\0\0\0\0";
+        let cases: [(c_int, &[u8], &str); 5] = [
+            // argv ["", "30"]
+            (2, b"\x0030\0E1=1\0", "30"),
+            // argv ["", "", "30"]
+            (3, b"\0\x0030\0E1=1\0E2=2\0", "30"),
+            // argv ["", "", "", "30"]
+            (4, b"\0\0\x0030\0E1=1\0E2=2\0E3=3\0", "30"),
+            // argv ["x", "", "30"]
+            (3, b"x\0\x0030\0", "x 30"),
+            // ten empty arguments
+            (
+                10,
+                b"\0\0\0\0\0\0\0\0\0\0E1=1\0E2=2\0E3=3\0E4=4\0E5=5\0\0\0\0\0\0\0",
+                "",
+            ),
+        ];
+        for (argc, args, cmd) in cases {
+            let buf = procargs(argc, &[&pad5[..], args].concat());
+            assert_eq!(
+                parse_procargs(&buf),
+                Some(("sleep".into(), cmd.into())),
+                "argc {argc}"
+            );
+        }
+        // `/bin/sh -c 'read _'` with argv[0] "": no padding after a 7-byte path.
+        let sh = procargs(3, b"/bin/sh\0\0-c\0read _\0RTOP_LEAK_PROBE=1\0");
+        assert_eq!(parse_procargs(&sh), Some(("sh".into(), "-c read _".into())));
+    }
+
+    #[test]
+    fn procargs_empty_argv0_with_every_path_length() {
+        for len in 1..=24 {
+            let path = format!("/{}", "s".repeat(len - 1));
+            let mut rest = path.clone().into_bytes();
+            rest.resize(len + 1 + path_padding(len), 0);
+            // argv ["", "", "30"], then the environment.
+            rest.extend_from_slice(b"\0\x0030\0RTOP_LEAK_PROBE=1\0B=2\0");
+            let (name, cmd) = parse_procargs(&procargs(3, &rest)).unwrap();
+            assert_eq!(cmd, "30", "path length {len}");
+            assert_eq!(name, path.trim_start_matches('/'), "path length {len}");
+        }
     }
 
     #[test]
@@ -1602,6 +1686,38 @@ mod tests {
             errors.len(),
             errors.join("\n")
         );
+    }
+
+    /// A blank `argv[0]` must not pull the environment into the command line. The
+    /// environment holds only the probe, so any leak shows it. `sleep` refuses an empty
+    /// argument, so `sh` waiting on its stdin carries the empty extra argument.
+    #[test]
+    fn empty_argv0_does_not_leak_the_environment() {
+        use std::os::unix::process::CommandExt;
+        use std::process::{Command, Stdio};
+
+        let spawn = |cmd: &mut Command| {
+            cmd.arg0("")
+                .env_clear()
+                .env("RTOP_LEAK_PROBE", "1")
+                .stdin(Stdio::piped())
+                .spawn()
+                .unwrap()
+        };
+        let mut sleep = spawn(Command::new("/bin/sleep").arg("30"));
+        let mut sh = spawn(Command::new("/bin/sh").args(["-c", "read _", ""]));
+        let mut sys = System::new();
+        let procs = ProcCollector::new().collect(&mut sys, 1.0, true);
+        let cmds = [sleep.id(), sh.id()].map(|pid| row(&procs, pid).cmd.to_string());
+        for child in [&mut sleep, &mut sh] {
+            child.kill().unwrap();
+            child.wait().unwrap();
+        }
+        assert!(
+            cmds.iter().all(|cmd| !cmd.contains("RTOP_LEAK_PROBE")),
+            "{cmds:?}"
+        );
+        assert_eq!(cmds, ["30", "-c read _"]);
     }
 
     #[test]
