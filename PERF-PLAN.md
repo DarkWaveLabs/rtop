@@ -212,12 +212,31 @@ Also:
 - Saving: about 20 of 48 UI samples on 609 processes; more on hosts with thousands of processes.
 - Tests: an equivalence test that renders the windowed table and the full table into `TestBackend` for many cases (rows, height, selection, offset, and key sequences with `j`, `k`, `PageDown`, `PageUp`, `g`, `G`), and checks that the screens and the resulting `TableState` are the same. An ignored `draw_cost` bench with 2,000 processes.
 
-### W6. Optional, after measuring waves A and B
+### W6. macOS storage and network (worker N, wave B)
 
-Do these only if the stretch target is not met, cheapest first:
+Added after wave A, from a probe that timed the thread CPU time of each collector on the reference Mac (wall time includes waits on other processes, such as `hidd` for sensors):
 
-- Skip `proc_pid_rusage` while the I/O columns are not drawn and the sort is not I/O. The first sample after they show again must give rate 0.
-- A native macOS network reader (`sysctl(NET_RT_IFLIST2)`), like `SysfsNet` on Linux. About 15 of 23 samples.
+| Work | rtop CPU each time | How often | CPU per second |
+|---|---|---|---|
+| Disk I/O: `IOServiceGetMatchingServices` and a registry walk for one whole disk | 2.20 ms | each tick | 2.2 ms |
+| Processes (native, W3) | 2.04 ms | each tick | 2.0 ms |
+| Network: `if_indextoname` (a whole `getifaddrs`) for each of 19 interfaces | 1.78 ms | each tick | 1.8 ms |
+| UI draw (W5) | - | each tick | about 1.4 ms |
+| Disk space: reads every listed disk, kept or not | 29.1 ms | 30 s | 1.0 ms |
+| Disk re-list: refreshes the I/O of every listed disk | 3.98 ms | 5 s | 0.8 ms |
+| Sensors: 12 hottest; full scan | 0.46 ms; 2.55 ms | 5 s; 30 s | 0.2 ms |
+
+Changes, macOS unless said:
+
+- Disk I/O: find the `IOBlockStorageDriver` registry entry of each whole disk once (when the disk list changes), keep it, and read only its `Statistics` property on each tick (`IORegistryEntryCreateCFProperty`). Release the entries when a disk goes. The counters and rates stay the same.
+- Disk re-list (every OS): re-list without the I/O kind; the I/O loop of each tick then runs on re-list ticks too, for the group leaders only.
+- Disk space (every OS): read the space only of disks that `keep_volume` keeps by mount and file system, on the 30 s read and for new mounts.
+- Network: a native reader like `SysfsNet`. Take the names from the `sockaddr_dl` after each `RTM_IFINFO2` message of one `sysctl(NET_RT_IFLIST2)` call, not from `if_indextoname`. Keep 64-bit counters: `sysinfo` issue #1378 says the counters in that buffer can be 32 bits, so read `IFMIB_IFDATA` for each interface if that is still true. Same interfaces and totals as `sysinfo` gives today.
+- Files: `net.rs`, `storage.rs`, `metrics.rs` (the network wiring), `Cargo.toml` (`objc2-io-kit` features only, no new crate).
+- Saving: about 4.5 ms of CPU each second (about 0.45%).
+- Tests: a pure parser for the routing-message buffer on a synthetic buffer; the `Statistics` dictionary reader on a built `CFDictionary`; live macOS tests that the native network list and the `sysinfo` list agree on names and totals, and that the disk counters equal the `sysinfo` counters.
+
+Still optional, only if the stretch target is not met: skip `proc_pid_rusage` while the I/O columns are not drawn and the sort is not I/O (the first sample after they show again gives rate 0).
 
 ### W7. Documents (lead)
 
@@ -309,12 +328,13 @@ Each worker gets one batch, in its own git worktree, and commits there. The lead
 | A | P1 | W3 | `process.rs`, `process/macos.rs`, `process/sysinfo_procs.rs` | Opus, high (FFI, kill identity) |
 | B | P2 | W4 | `process/linux.rs`, `process.rs` (wiring), `process/sysinfo_procs.rs` (remove the Linux branch), `testdata/proc/`, `Cargo.toml` | Opus, medium |
 | B | U | W5 | `ui.rs` (`draw_processes`), `ui/process.rs` | Opus, medium |
+| B | N | W6 | `net.rs`, `storage.rs`, `metrics.rs` (network wiring), `Cargo.toml` (features) | Opus, high (IOKit and CF ownership) |
 | C | reviewer | review the combined diff against this plan | read-only | Opus, high |
 | C | fixers | high and medium findings, one batch for each file set | as the findings need | Opus, medium |
 | C | verifier | section 9 checks | read-only | Sonnet, medium |
 | C | lead | benchmark, W6 decision, W7, results | `PERF-PLAN.md`, `docs/` | - |
 
-After W0b, S and P1 share no file. Agents: 6 to 7. Wave B starts after wave A is merged and green.
+After W0b, S and P1 share no file. Wave B starts after wave A is merged and green. Agents: 8 (critic, S, P1, P2, U, N, reviewer, verifier), plus fixers if the review finds high or medium issues.
 
 ## 9. Verification
 
@@ -360,6 +380,12 @@ Filled in as each wave lands.
 | Stage | Steady CPU (1 s) | Steady CPU (250 ms) | Fast tick | Slow tick | Binary size | Notes |
 |---|---|---|---|---|---|---|
 | Baseline `20a6b96` | 2.80%, 2.90% | 9.13% | 16.3 ms | 106 ms | 926,192 | htop at 1 s: 0.46%, 0.47% |
+| W1, W2 `4bb5bd8` | 2.09% (one run) | - | 19.3 ms | 35.0 ms (5 s), 89.5 ms (30 s) | 942,752 | Another worker was building during the run. |
+| Wave A `4bfeca4` | 1.00%, 1.09% | 4.04% | 8.6 ms | 23.5 ms (5 s), 81.0 ms (30 s) | 942,704 | htop at 1 s: 0.44%. Target 0.9% not met; see W6. |
+
+Binary size note: on `aarch64-apple-darwin` the file grows in 16 KiB pages. W0b added 1,444 bytes of code but 16,528 bytes of file, because the code crossed a page boundary. Compare code size from a linker map (`-C link-arg=-Wl,-map,<file>`) as well as the file size.
+
+Security finding during W3: `sysinfo` 0.39.6 on macOS parses `KERN_PROCARGS2` past the argument list when a process has empty arguments (processes that rewrite their title, such as Node and Electron helpers). rtop 0.2.0 then shows environment variables, secrets included, in the command column. The native parser (W3) counts empty arguments, so it stops at `argc`. Windows and FreeBSD do not use this parser.
 
 ## 12. Not in this round
 
