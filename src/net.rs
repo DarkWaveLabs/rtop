@@ -738,8 +738,7 @@ mod tests {
         assert_eq!(libc::AF_LINK, libc::c_int::from(layout::AF_LINK));
         assert_eq!(offset_of!(libc::if_data64, ifi_ibytes), layout::IFI_IBYTES);
         assert_eq!(offset_of!(libc::if_data64, ifi_obytes), layout::IFI_OBYTES);
-        // `ifmibdata`: a name, then 5 counters and 4 fillers of 4 bytes, then `if_data64`.
-        assert_eq!(libc::IFNAMSIZ + 9 * 4, layout::IFMD_DATA);
+        assert_eq!(offset_of!(libc::ifmibdata, ifmd_data), layout::IFMD_DATA);
     }
 
     /// The (rx, tx) totals of `RouteNet::read`, by name.
