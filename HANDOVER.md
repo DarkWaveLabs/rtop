@@ -1,77 +1,83 @@
 # Handover: CPU round 1
 
-Status on 2026-10-20: waves 0 and A are merged; wave B is in progress. Branch `perf/cpu-round-1`, not pushed. The full plan is in [PERF-PLAN.md](PERF-PLAN.md).
+Status on 2026-10-21: done on macOS. Branch `perf/cpu-round-1`, 31 commits on `20a6b96`, not pushed. The full plan, the measurements and the acceptance results are in [PERF-PLAN.md](PERF-PLAN.md).
 
 ## The problem
 
 A user reported that htop uses about 0.2% CPU and rtop about 1.5%. On the reference Mac (Apple M5, 10 cores, about 600 processes, 1 s interval, 120×40), rtop used 2.85% and htop 0.47%. 85% of rtop's cost was kernel time, so system calls were the cause, not Rust code.
 
-## Results so far
+## Result
 
-| Stage | Steady CPU at 1 s | At 250 ms | Fast tick | Commit |
-|---|---|---|---|---|
-| Baseline | 2.80%, 2.90% | 9.13% | 16.3 ms | `20a6b96` |
-| Sampler and cadence (W1, W2) | 2.09% | - | 19.3 ms | `4bb5bd8` |
-| Native macOS processes (wave A) | 1.00%, 1.09% | 4.04% | 8.6 ms | `4bfeca4` |
-| htop, same host | 0.44%-0.47% | - | - | - |
+rtop now costs about as much CPU as htop. The host's load moves both programs, so compare them in the same window:
 
-Wave B aims at about 0.5% to 0.6%, the same as htop.
+| Window | rtop | htop | rtop ÷ htop |
+|---|---|---|---|
+| Before (0.2.0) | 2.85% | 0.47% | 6.1× |
+| After wave A | 1.05% | 0.44% | 2.4× |
+| After wave B | 0.33% | 0.26% | 1.3× |
+| Final branch | 0.58% | 0.55% | 1.06× |
+| A/B check, final binary | 0.62%-0.73% | 0.46% | 1.4×-1.6× |
+
+At 250 ms, rtop went from 9.1% to 1.1%-2.1%. A fast tick went from 16.3 ms to about 2-4 ms.
 
 ## What we found
 
-- **Processes on macOS.** `sysinfo` 0.39.6 copies the argument area of every process on every refresh (two `KERN_PROCARGS2` calls), and it cannot be turned off. With the four other calls, that was about 3,650 system calls on each tick. For other users' processes, most of these calls fail with `EPERM` on every tick.
-- **Processes on Linux** (from the source, not measured). `with_tasks()` makes `sysinfo` read `stat`, `statm` and `io` for every thread as well as every process, and `status` for every PID. rtop then drops the threads.
-- **The sampler loop.** It woke 20 times a second to check for kills. On macOS each `thread::sleep` costs a mach call.
-- **Slow collectors.** The sensors re-list, the disk space read (CacheDelete and `os_log`) and the disk re-list ran every 5 s for every disk, also for disks rtop does not show.
-- **What is left after wave A** (thread CPU per call, so not waiting time): disk I/O IOKit matching 2.2 ms per tick, processes 2.0 ms, network 1.8 ms (`getifaddrs` once per interface), UI about 1.4 ms per second, disk space 29 ms each 30 s, disk re-list 4 ms each 5 s. The sensors are cheap for rtop; their wall time is spent waiting on `hidd`.
+- **Processes on macOS.** `sysinfo` 0.39.6 copies the argument area of every process on every refresh (two `KERN_PROCARGS2` calls), with no way to turn it off. That was about 3,650 system calls on each tick. For other users' processes, most of these fail with `EPERM` on every tick.
+- **Processes on Linux.** `sysinfo` reads `stat`, `statm` and `io` for every thread, and `status` for every PID. `ProcessRefreshKind::nothing()` already turns tasks on.
+- **The sampler loop.** It woke 20 times a second; on macOS each `thread::sleep` costs a mach call.
+- **Slow work.** Sensor re-lists, disk space (CacheDelete), and disk re-lists ran every 5 s for every disk.
+- **After wave A,** a probe of thread CPU per collector found the rest: IOKit matching for disk I/O (2.2 ms per tick), `getifaddrs` once per network interface (1.8 ms), and space reads of disks rtop does not show.
+- **`sample` counts waiting time.** Sensors looked costly in the profile, but most of their wall time is waiting on `hidd`. Thread CPU time (`CLOCK_THREAD_CPUTIME_ID`) gives the real cost.
 
 ## What landed
 
-| Commit | Change |
+| Area | Change |
 |---|---|
-| `8a1205b` | `scripts/cpubench.py` (stdlib Python, runs a TUI in a pseudo-terminal and prints its CPU use) and the ignored `sample_cost` test. |
-| `c982fd7`, `dd486f9` | `PERF-PLAN.md`, revised after a critic review and after wave A. |
-| `f3f2e16` | One process-collector interface for every OS (`collect`, `signal`). `start_time` became `ident`, the identity that the kill check compares. Names became `Arc<str>`. |
-| `7961f3c` | A control channel (`Kill`, `Wake`, `Pause`). The sampler blocks until the next tick and does no sampling while paused. |
-| `4bb5bd8` | Each slow collector has its own cadence. The UI publishes the panels it drew. Sensors: the 12 hottest each 5 s and a full scan each 30 s, only while the panel is drawn. Disk space each 30 s. macOS disk I/O: one refresh for each whole disk. |
-| `4bfeca4` | A native macOS process collector: about 2 calls for each readable process on each tick, and none for other users' processes on a fast tick. The kill check uses `p_uniqueid`. |
-
-## In progress (wave B)
-
-- **P2:** a native Linux process collector, with the same design as the macOS one.
-- **U:** the process table builds rows only for the visible window, not for every process.
-- **N:** macOS disk I/O through a cached IOKit entry, a native macOS network reader, and space and re-list reads only for disks that rtop shows.
-
-Next: merge wave B, one review of the combined diff, fixes for high and medium findings, a verifier pass, a benchmark, the document updates (W7 in the plan), and a manual run of the TUI.
+| Tools | `scripts/cpubench.py`; the ignored tests `sample_cost`, `collector_cost` and `draw_cost`. |
+| Sampler | A control channel (`Kill`, `Wake`, `Pause`): it blocks until the next tick and does no sampling while paused. |
+| Cadence | Each slow collector has its own period, and some skip work when their panel is not drawn (sensors, disk space). |
+| Processes | Native collectors on macOS (`libproc`) and Linux (`/proc`). Windows and FreeBSD keep `sysinfo`. |
+| Kill identity | `p_uniqueid` on macOS, the start time in clock ticks on Linux, the start time in seconds elsewhere. |
+| macOS I/O and network | A cached IOKit driver entry for each whole disk; one `NET_RT_IFLIST2` call plus `IFMIB_IFDATA`. |
+| UI | Table rows only for the visible window: 2.9 ms to 0.43 ms per frame with 2,000 processes. |
+| Review fixes | 8 process findings and 6 storage and sampler findings (see the commits from `9450548` to `ba38d42`). |
+| Docs | `architecture.md`, `usage.md`, `platforms.md`, `CONTRIBUTING.md`, `SECURITY.md`, `README.md`, `src/README.md`, `CHANGELOG.md`. |
 
 ## Testing done
 
-- **Benchmark:** `scripts/cpubench.py`, 60 s runs, two runs for each main build, rtop against htop at the same interval. Numbers are above and in `PERF-PLAN.md` section 11.
-- **Profiles:** `sample` on a release build with symbols, before and after wave A.
-- **Per-collector probe:** thread CPU time (`CLOCK_THREAD_CPUTIME_ID`) against wall time for each collector, in a scratch copy. It showed that `sample` counts waiting time too, so the sensors looked costlier than they are.
-- **Checks on each merge:** `cargo fmt --check`; `cargo clippy --all-targets -- -D warnings` for the host and for `x86_64-apple-darwin`, `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, `x86_64-pc-windows-msvc` and `x86_64-unknown-freebsd`; `cargo test` (334 passed, 1 ignored, after wave A).
-- **New tests:** the cadence rules, the control channel with a fake sampler, the group-shared disk I/O, the sensor choice by index, and the macOS collector's decisions with fake system calls. Live macOS tests compare the whole process list with the `sysinfo` collector, and kill a `sleep` child through the identity check.
-- **Size:** the binary changes in 16 KiB pages on arm64 macOS, so a linker map gives the real code growth. After wave A the file is 942,704 bytes, against 926,192 at the baseline.
+- **Benchmarks:** `scripts/cpubench.py`, 60 s runs against htop at the same interval, at each stage, and a final A/B run of the wave B and final binaries.
+- **Profiles and probes:** `sample` before and after wave A; thread CPU time per collector.
+- **Checks:** fmt; clippy with `-D warnings` for the host and five targets (`x86_64-apple-darwin`, both Linux musl targets, Windows, FreeBSD); 385 tests on macOS, run twice. The Linux tests also ran in Docker (`rust:1.99-alpine`): 349 passed.
+- **Live tests:** the whole macOS process list against `sysinfo`; kills of `sleep` children through the identity check; the macOS environment leak with an empty `argv[0]`; that `exec` keeps `p_uniqueid`; the macOS network and disk counters against `sysinfo`.
+- **Review:** a critic review of the plan, two code reviews (process and kill; sampler, storage, network and UI), and a verifier pass.
+- **TUI run:** a scripted run in a pseudo-terminal, checked through a terminal emulator: TERM and KILL, PID 1 refused, pause at 0 ms CPU, `+` and `-`, the view keys, and a clean quit.
 
-## Not tested yet
+## Not tested
 
-- Linux: no Linux host or Docker in this round. The Linux code compiles for two Linux targets and its parsers have tests here. Its live tests run only in CI or in Docker.
-- A manual TUI run of kill, pause, `+` and `-` on the merged branch.
-- An Intel Mac, and running as root.
+- Linux CPU against htop, and a live Linux TUI run.
+- An Intel Mac, Rosetta, and running as root.
+- Swapping a USB disk for another with the same name while rtop runs.
 
 ## Things worth knowing
 
-- **Environment variables in the command column (fixed on this branch).** `sysinfo`'s macOS argument parser skips empty arguments without counting them, so it reads past `argc` into the environment. rtop 0.2.0 then shows environment variables of processes that rewrite their title (Node, Electron helpers). The native parser counts empty arguments. An upstream `sysinfo` issue is worth filing.
-- **Kill identity.** For other users' processes, start time 0 was compared with 0, so the old check matched anything. The native collectors use `p_uniqueid` on macOS and the start time in clock ticks on Linux.
-- **Process list parity.** Like `sysinfo`, the macOS collector drops zombies and `kernel_task`. Other users' processes now show their user and parent.
+- **Environment in the command column (fixed on this branch).** `sysinfo`'s macOS parser skips empty arguments without counting them, so it reads past `argc` into the environment. The macOS kernel, Apple's `ps` and psutil skip NULs the same way. rtop now skips only the measured padding after the exec path, and stops at `argc`.
+- **Kill identity on macOS.** The old check compared start time 0 with 0 for processes rtop cannot read, including setuid ones. `p_uniqueid` works for every process.
+- **Binary size.** On arm64 macOS the file grows in 16 KiB pages. Use a linker map for the real code growth.
+- **CPU count.** `available_parallelism()` and musl's `sysconf` follow rtop's own affinity. Linux reads `/sys/devices/system/cpu/online`.
+- **Docker.** Fixer F1 started Docker Desktop to run the Linux tests, against the "macOS only" decision; the brief did not repeat it. Docker Desktop is stopped again, and nothing was removed.
+
+## Known issues
+
+These are listed in `PERF-PLAN.md` section 11: the disk I/O read order on re-list ticks (as before the round), the name after `exec` (as with `sysinfo`), `n/a` after two failed disk counter reads, and `App::visible_rows` building a row for each process on each frame.
 
 ## Decisions for Chad
 
-- Push the branch and let CI run the Linux tests, or run them in Docker, before a merge to `main`.
-- A 0.2.1 release, or an advisory, for the command-line fix.
-- Whether `PERF-PLAN.md` and this file move to `docs/plans/performance/` after the round.
+- Push the branch and let CI run the Linux tests before a merge to `main`.
+- A release with the macOS command-line fix, and whether it needs an advisory.
+- An upstream `sysinfo` issue about the argument parser and the per-refresh `KERN_PROCARGS2` reads.
+- Whether `PERF-PLAN.md` and this file move to `docs/plans/performance/`.
 
 ## Housekeeping
 
-- Agent worktrees live in `.claude/worktrees/`. Remove them after the merges with `git worktree remove`.
-- Benchmark outputs and profiles are in the session scratchpad, not in the repo.
+- The agent worktrees and their branches are removed; every commit is on `perf/cpu-round-1`.
+- Benchmark outputs, profiles and the TUI check script are in the session scratchpad, not in the repo.

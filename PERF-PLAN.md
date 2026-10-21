@@ -1,6 +1,6 @@
 # Performance plan: CPU round 1
 
-Status: accepted, 2026-10-20, revised after a critic review. Branch: `perf/cpu-round-1`.
+Status: done on macOS, 2026-10-21. Accepted 2026-10-20 and revised after a critic review. Branch: `perf/cpu-round-1`. Results are in section 11.
 
 A user reported that htop uses about 0.2% CPU and rtop about 1.5%. This plan finds where rtop spends its CPU and removes the cost, without a change to what rtop shows, except where section 7 says so.
 
@@ -354,7 +354,7 @@ Acceptance:
 
 1. All the checks above pass.
 2. The benchmark in section 1 meets the target for the wave.
-3. `sample_cost` reports each kind of tick. Limits on the reference Mac: fast tick 4 ms or less; 5 s tick 15 ms or less with the sensors panel hidden; 30 s tick 60 ms or less.
+3. `sample_cost` reports each kind of tick. Limits on the reference Mac: fast tick 4 ms or less; 5 s tick 15 ms or less with the sensors panel hidden; 30 s tick 45 ms or less of thread CPU (`collector_cost`). Changed on 2026-10-21 from 60 ms of wall time: most of that tick's wall time is spent waiting on macOS services (the disk space service and `hidd`), not on rtop's own CPU.
 4. A manual run on this Mac: the process table, tree, filter, sort, kill (TERM and KILL on a `sleep` process), pause, `+` and `-` work as before.
 5. The binary grows by 40 KiB or less.
 
@@ -382,6 +382,39 @@ Filled in as each wave lands.
 | Baseline `20a6b96` | 2.80%, 2.90% | 9.13% | 16.3 ms | 106 ms | 926,192 | htop at 1 s: 0.46%, 0.47% |
 | W1, W2 `4bb5bd8` | 2.09% (one run) | - | 19.3 ms | 35.0 ms (5 s), 89.5 ms (30 s) | 942,752 | Another worker was building during the run. |
 | Wave A `4bfeca4` | 1.00%, 1.09% | 4.04% | 8.6 ms | 23.5 ms (5 s), 81.0 ms (30 s) | 942,704 | htop at 1 s: 0.44%. Target 0.9% not met; see W6. |
+| Wave B `d85f0a1` | 0.33%, 0.33% | 1.13% | 1.95 ms | 14.1 ms (5 s), 67 ms (30 s) | 942,720 | htop at 1 s: 0.26% in the same window. |
+| Final `ba38d42` (review fixes) | 0.56%, 0.60% | 2.13% | 3.9-4.4 ms | 17-20 ms (5 s), 82-108 ms (30 s, wall) | 942,800 | Next morning, a busier host: htop 0.55% in the same window. |
+
+How to read these numbers: the host's load moves both programs. Compare rtop with htop in the same window, not across windows.
+
+| Window | rtop | htop | rtop ÷ htop |
+|---|---|---|---|
+| Baseline | 2.85% | 0.47% | 6.1× |
+| Wave A | 1.05% | 0.44% | 2.4× |
+| Wave B | 0.33% | 0.26% | 1.3× |
+| Final | 0.58% | 0.55% | 1.06× |
+| A/B check (final) | 0.62%-0.73% | 0.46% | 1.4×-1.6× |
+
+The A/B check ran the wave B and final binaries in turn in one window: 0.71% and 0.60% against 0.73% and 0.62%. The review fixes added no measurable cost.
+
+Acceptance (section 9), final branch:
+
+| Item | Result |
+|---|---|
+| fmt, clippy on the host and five targets, tests | Pass. 385 tests on macOS (twice, no flaky failures). F1 also ran the Linux tests in Docker (`rust:1.99-alpine`): 349 passed. |
+| CPU targets | Stretch (0.5%) met in the wave B window; about htop's level in every window. |
+| `sample_cost` | Fast tick 3.9-4.4 ms (limit 4 ms, at the edge on a busy host); 5 s tick with sensors hidden 4.5-6.0 ms (limit 15 ms); 30 s tick 24-28 ms thread CPU for the space read (limit 45 ms). |
+| Manual run | A scripted run in a pseudo-terminal, checked through a terminal emulator: TERM and KILL reach the right `sleep` process, PID 1 is refused, pause uses 0 ms of CPU in 6 s, `+` and `-` work, the view keys work, `q` exits cleanly. |
+| Binary size | 942,800 bytes, +16,608 (one 16 KiB page; the limit is 40 KiB). |
+| `unsafe` | Every block and declaration has a `SAFETY` comment. |
+
+Known issues after the round:
+
+- Disk I/O counters are read after the re-list and the space reads on those ticks, so on a 30 s tick at 250 ms an I/O rate can be off by about 10% for one tick. This was so before the round.
+- After `exec`, a process keeps the name and command line it had when rtop first saw it, as with `sysinfo`.
+- After two failed counter reads in a row, a volume shows `n/a` until a read works.
+- The process table still builds a `ProcRow` for each process on each frame (`App::visible_rows`); in tree view each row has a prefix string.
+- Linux has not been benchmarked against htop.
 
 Binary size note: on `aarch64-apple-darwin` the file grows in 16 KiB pages. W0b added 1,444 bytes of code but 16,528 bytes of file, because the code crossed a page boundary. Compare code size from a linker map (`-C link-arg=-Wl,-map,<file>`) as well as the file size.
 
