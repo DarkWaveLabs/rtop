@@ -14,7 +14,7 @@ categories = ["command-line-utilities"]
 [dependencies]
 anyhow = "1.0.104"
 ratatui = "0.30.2"
-sysinfo = "0.39.6"
+sysinfo = "0.40.1"
 
 [target.'cfg(any(target_os = "macos", target_os = "linux", target_os = "freebsd"))'.dependencies]
 libc = "0.2.190"
